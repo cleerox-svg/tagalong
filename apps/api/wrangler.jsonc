@@ -5,11 +5,14 @@
 	"compatibility_date": "2026-10-01",
 	"compatibility_flags": ["nodejs_compat"],
 
-	// No custom domain yet. Until the product plan names one, the Worker is
-	// served on its workers.dev URL. To move to a Custom Domain later, add
-	//   "routes": [{ "pattern": "<host>", "custom_domain": true }]
-	// and set workers_dev to false.
-	"workers_dev": true,
+	// Custom Domain on the averrow.com zone, like bvom-api.averrow.com.
+	// Cloudflare creates the DNS record and issues the edge certificate itself.
+	// It cannot be created over an existing DNS record for this hostname.
+	// tagalong.averrow.com is left free for a web app.
+	"routes": [{ "pattern": "tagalong-api.averrow.com", "custom_domain": true }],
+
+	// Production traffic arrives only on the Custom Domain above.
+	"workers_dev": false,
 	"preview_urls": false,
 
 	"observability": { "enabled": true, "head_sampling_rate": 1 },
