@@ -1,0 +1,85 @@
+name: Auto-merge
+
+# Merges a pull request once CI is green on its current head commit, then
+# deploys. This is the "automated merging" half of CI/CD.
+#
+# A PR is merged only when ALL of these hold:
+#   - CI finished with `success` for the PR's CURRENT head SHA
+#   - every other check run on that SHA is finished and not failing
+#   - the PR is open, not a draft, targets main, and comes from this repo
+#     (never a fork)
+#   - it does not carry the `hold` label
+#   - no review is requesting changes
+#   - it is not a Dependabot PR (dependency bumps are merged by a person)
+#
+# To keep a PR from merging: leave it as a draft, or add the `hold` label.
+#
+# workflow_run always runs the copy of this file on the default branch, with a
+# write token, but it never checks out or runs the PR's code - it only reads
+# the PR through the API and asks GitHub to merge it.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write # to dispatch deploy.yml after merging
+
+concurrency:
+  group: auto-merge-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      !startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Merge if ready
+        id: merge
+        run: |
+          set -euo pipefail
+          echo "merged=false" >> "$GITHUB_OUTPUT"
+
+          pr="$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+            --json number,isDraft,headRefOid,baseRefName,labels,reviewDecision,headRepositoryOwner \
+            --jq '.[0] // empty')"
+          if [ -z "$pr" ]; then echo "No open PR for $BRANCH."; exit 0; fi
+
+          num="$(jq -r .number <<<"$pr")"
+          skip() { echo "PR #$num not merged: $1"; exit 0; }
+
+          [ "$(jq -r .isDraft <<<"$pr")" = "false" ] || skip "it is a draft"
+          [ "$(jq -r .baseRefName <<<"$pr")" = "main" ] || skip "it does not target main"
+          [ "$(jq -r .headRefOid <<<"$pr")" = "$SHA" ] || skip "its head moved past the commit CI tested"
+          jq -e '[.labels[].name] | index("hold") | not' <<<"$pr" >/dev/null || skip "it carries the hold label"
+          [ "$(jq -r '.reviewDecision // ""' <<<"$pr")" != "CHANGES_REQUESTED" ] || skip "a review requests changes"
+
+          # Every check run on this commit must be finished and not failing.
+          pending_or_bad="$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+            --jq '.check_runs[] | select(.status != "completed" or (.conclusion | IN("success","skipped","neutral") | not)) | "\(.name): \(.status)/\(.conclusion)"')"
+          if [ -n "$pending_or_bad" ]; then
+            printf '%s\n' "$pending_or_bad"
+            skip "not every check on $SHA is green yet"
+          fi
+
+          # --match-head-commit: if anything was pushed since CI ran, GitHub
+          # refuses the merge rather than merging untested code.
+          gh pr merge "$num" --repo "$REPO" --merge --match-head-commit "$SHA"
+          echo "Merged PR #$num at $SHA."
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        if: steps.merge.outputs.merged == 'true'
+        run: gh workflow run deploy.yml --repo "$REPO" --ref main

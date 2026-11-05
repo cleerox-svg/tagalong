@@ -1,0 +1,29 @@
+{
+	"name": "tagalong",
+	"private": true,
+	"type": "module",
+	"packageManager": "pnpm@10.33.0",
+	"engines": {
+		"node": ">=22.0.0",
+		"pnpm": ">=10.0.0"
+	},
+	"scripts": {
+		"dev": "turbo run dev",
+		"build": "turbo run build",
+		"lint": "turbo run lint",
+		"typecheck": "turbo run typecheck",
+		"test": "turbo run test",
+		"format": "prettier --write .",
+		"format:check": "prettier --check .",
+		"guard:migrations": "bash scripts/check-migrations-immutable.sh",
+		"db:migrate:local": "wrangler d1 migrations apply tagalong-db --config apps/api/wrangler.jsonc --local",
+		"db:migrate:remote": "wrangler d1 migrations apply tagalong-db --config apps/api/wrangler.jsonc --remote"
+	},
+	"devDependencies": {
+		"@types/node": "catalog:",
+		"prettier": "catalog:",
+		"turbo": "^2.10.12",
+		"typescript": "catalog:",
+		"wrangler": "catalog:"
+	}
+}

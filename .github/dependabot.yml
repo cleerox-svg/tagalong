@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      # @cloudflare/vitest-plugin peers on a specific vitest major, so these
+      # must move together or the install breaks.
+      cloudflare:
+        patterns: ["wrangler", "@cloudflare/*", "miniflare", "vitest", "@vitest/*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

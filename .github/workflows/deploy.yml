@@ -1,0 +1,103 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  # auto-merge.yml dispatches this after it merges: a merge made with the
+  # workflow's GITHUB_TOKEN does not fire `push` workflows, by GitHub's design.
+  workflow_dispatch:
+
+# Never run two production deploys at once, and never cancel one mid-flight: a
+# cancelled migration is the worst available outcome.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ci.yml and deploy.yml both fire on push to main and do not wait for each
+  # other. Without this job, a red build would still deploy.
+  gate:
+    name: Gate (typecheck + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run typecheck test
+
+  migrate:
+    name: Apply D1 migrations
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      # Migrations run BEFORE the new code deploys. Safe because migrations are
+      # append-only (enforced in ci.yml): the running Worker never sees a
+      # column disappear underneath it.
+      - uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          packageManager: pnpm
+          command: d1 migrations apply tagalong-db --config apps/api/wrangler.jsonc --remote
+
+  deploy-api:
+    name: Deploy API Worker
+    needs: migrate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      - uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/api
+          packageManager: pnpm
+          # --var GIT_SHA is what /health serves; --tag is what the smoke job
+          # reads back from the Cloudflare API.
+          command: deploy --tag ${{ github.sha }} --var GIT_SHA:${{ github.sha }}
+          # App secrets are NOT passed here. They are set once with
+          # `wrangler secret put` and persist across deploys.
+
+  smoke:
+    name: Smoke test
+    needs: deploy-api
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: API Worker is serving this commit
+        run: bash scripts/deployed-version.sh tagalong-api "${{ github.sha }}"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Set the repository variable API_URL (e.g. the workers.dev URL, later the
+      # custom domain) to turn this on.
+      - name: API health
+        if: ${{ !cancelled() && vars.API_URL != '' }}
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            body="$(curl -sS --max-time 15 "${{ vars.API_URL }}/health" || true)"
+            if printf '%s' "$body" | grep -q '"ok":true'; then
+              echo "OK: $body"; exit 0
+            fi
+            echo "attempt $i: $body"; sleep $((i * 5))
+          done
+          echo "::error::/health did not report ok"; exit 1
