@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+    # ready_for_review: a draft marked ready gets a fresh run, and a green run is
+    # what triggers auto-merge.yml.
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  migrations:
+    name: Migrations are append-only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # merge-base needs full history
+
+      - name: Resolve comparison base
+        id: base
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+            echo "sha=$(git merge-base "origin/${{ github.event.pull_request.base.ref }}" HEAD)" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            elif git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+              echo "sha=$BEFORE" >> "$GITHUB_OUTPUT"
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "sha=$(git rev-parse HEAD^ 2>/dev/null || echo '')" >> "$GITHUB_OUTPUT"
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Enforce append-only migrations
+        if: steps.base.outputs.skip != 'true' && steps.base.outputs.sha != ''
+        run: bash scripts/check-migrations-immutable.sh "${{ steps.base.outputs.sha }}" HEAD
+
+  verify:
+    name: Lint / Typecheck / Test / Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # must precede setup-node for `cache: pnpm`
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Lint, typecheck, test, build
+        run: pnpm turbo run lint typecheck test build
+
+      # Local D1 (Miniflare) only: no Cloudflare account or token is involved.
+      - name: D1 migration dry-run
+        run: |
+          set -euo pipefail
+          rm -rf .wrangler-ci
+          CI=true pnpm exec wrangler d1 migrations apply tagalong-db \
+            --config apps/api/wrangler.jsonc --local --persist-to .wrangler-ci
+
+      - name: Migrations are idempotent
+        run: |
+          # A second apply must be a clean no-op.
+          CI=true pnpm exec wrangler d1 migrations apply tagalong-db \
+            --config apps/api/wrangler.jsonc --local --persist-to .wrangler-ci

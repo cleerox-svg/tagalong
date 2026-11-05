@@ -1,0 +1,35 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "tagalong-api",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+	"compatibility_flags": ["nodejs_compat"],
+
+	// No custom domain yet. Until the product plan names one, the Worker is
+	// served on its workers.dev URL. To move to a Custom Domain later, add
+	//   "routes": [{ "pattern": "<host>", "custom_domain": true }]
+	// and set workers_dev to false.
+	"workers_dev": true,
+	"preview_urls": false,
+
+	"observability": { "enabled": true, "head_sampling_rate": 1 },
+
+	// Non-secret configuration only. Secrets go through `wrangler secret put`
+	// and never appear in this file.
+	"vars": {
+		"ENVIRONMENT": "production",
+		// Overwritten at deploy time with --var GIT_SHA:<sha>; /health serves it.
+		"GIT_SHA": "dev",
+	},
+
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "tagalong-db",
+			"database_id": "d31489d3-930e-4fed-b961-239f3f1aaebc",
+			// Migrations live at the repo root so CI, tests and deploy all read
+			// one directory. Resolved relative to this config file.
+			"migrations_dir": "../../migrations",
+		},
+	],
+}

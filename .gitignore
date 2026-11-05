@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.turbo/
+.wrangler/
+.wrangler-ci/
+coverage/
+*.log
+
+# Local secrets - never commit
+.dev.vars
+.env
+.env.*
+!.env.example
+
+.DS_Store

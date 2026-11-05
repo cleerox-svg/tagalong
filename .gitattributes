@@ -1,0 +1,3 @@
+* text=auto eol=lf
+# Keep migration bytes stable across platforms so their hashes never drift.
+*.sql text eol=lf
