@@ -2,10 +2,10 @@
 
 ## 1. Cloudflare
 
-Already done: the D1 database `tagalong-db`
+Already done: the Worker `tagalong-api` is deployed on
+`https://tagalong-api.averrow.com`, and the D1 database `tagalong-db`
 (`d31489d3-930e-4fed-b961-239f3f1aaebc`) exists and is wired into
-`apps/api/wrangler.jsonc`. The Worker `tagalong-api` is created on its first
-deploy.
+`apps/api/wrangler.jsonc`.
 
 ## 2. GitHub repository secrets
 
@@ -18,8 +18,13 @@ Settings → Secrets and variables → Actions → **Secrets**:
 
 The same token BVOM uses works if it carries those permissions.
 
-Optional **Variable** `API_URL` (e.g. `https://tagalong-api.<subdomain>.workers.dev`)
-turns on the `/health` check in the deploy smoke test.
+The token also needs **Zone → Workers Routes: Edit** (and **DNS: Edit**) on the
+`averrow.com` zone, because the Worker is served on the Custom Domain
+`tagalong-api.averrow.com` and the deploy creates that route and DNS record.
+
+The deploy smoke test checks `https://tagalong-api.averrow.com/health`. If the
+averrow.com zone shows CI a bot challenge, that check reports UNVERIFIED as a
+warning rather than failing; add a WAF skip rule for the hostname to clear it.
 
 ## 3. Let Actions merge
 

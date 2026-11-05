@@ -87,17 +87,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      # Set the repository variable API_URL (e.g. the workers.dev URL, later the
-      # custom domain) to turn this on.
+      # Not cancelled-gated on the step above: a wrong live version and a
+      # failing /health are different problems, and both should be reported.
       - name: API health
-        if: ${{ !cancelled() && vars.API_URL != '' }}
-        run: |
-          set -euo pipefail
-          for i in 1 2 3 4 5; do
-            body="$(curl -sS --max-time 15 "${{ vars.API_URL }}/health" || true)"
-            if printf '%s' "$body" | grep -q '"ok":true'; then
-              echo "OK: $body"; exit 0
-            fi
-            echo "attempt $i: $body"; sleep $((i * 5))
-          done
-          echo "::error::/health did not report ok"; exit 1
+        if: ${{ !cancelled() }}
+        run: bash scripts/health-check.sh https://tagalong-api.averrow.com

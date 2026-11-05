@@ -15,7 +15,7 @@ repo currently holds the platform skeleton only.
 ## Layout
 
 ```
-apps/api/         Hono Worker        → tagalong-api (workers.dev for now)
+apps/api/         Hono Worker        → tagalong-api.averrow.com
 packages/config/  shared tsconfig
 migrations/       numbered D1 SQL migrations — APPEND ONLY
 scripts/          CI helpers
