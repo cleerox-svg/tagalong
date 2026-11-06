@@ -7,6 +7,50 @@ Already done: the Worker `tagalong-api` is deployed on
 (`d31489d3-930e-4fed-b961-239f3f1aaebc`) exists and is wired into
 `apps/api/wrangler.jsonc`.
 
+The web app deploys as a second, assets-only Worker, `tagalong-web`, on the
+Custom Domain `https://tagalong.averrow.com`. The first deploy after phase 1
+merges creates that route and DNS record (same token permissions as the API).
+
+## 1a. API Worker secrets (phase 1)
+
+Set once per secret, from `apps/api`; they persist across deploys and never go
+in a file:
+
+```sh
+cd apps/api
+openssl rand -base64 48 | pnpm exec wrangler secret put SESSION_SECRET
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID
+pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
+pnpm exec wrangler secret put ANTHROPIC_API_KEY
+pnpm exec wrangler secret put TICKETMASTER_API_KEY
+pnpm exec wrangler secret put GOOGLE_MAPS_API_KEY
+```
+
+| Secret                 | Where it comes from                                                                                                                                                                                                                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SESSION_SECRET`       | Random, 32+ characters (the command above). Rotating it signs everyone out.                                                                                                                                                                                                                                |
+| `GOOGLE_CLIENT_ID`     | Google Cloud Console → APIs & Services → Credentials → OAuth client ID, type **Web application**. Authorised redirect URIs: `https://tagalong-api.averrow.com/auth/google/callback` and, for local dev, `http://localhost:8787/auth/google/callback`. Consent screen scopes: `openid`, `email`, `profile`. |
+| `GOOGLE_CLIENT_SECRET` | The same OAuth client.                                                                                                                                                                                                                                                                                     |
+| `ANTHROPIC_API_KEY`    | console.anthropic.com → API keys. Used only to read a free-text trip request into form fields.                                                                                                                                                                                                             |
+| `TICKETMASTER_API_KEY` | developer.ticketmaster.com → My Apps → Consumer Key (Discovery API).                                                                                                                                                                                                                                       |
+| `GOOGLE_MAPS_API_KEY`  | Google Cloud Console → a key with **Places API (New)** enabled. Restrict it to that API. It is used server-side only, so do not add an HTTP-referrer restriction.                                                                                                                                          |
+
+Until these are set, `/health` stays green but sign-in and planning answer
+"not configured".
+
+Exchange rates come from the European Central Bank's daily reference rates via
+`api.frankfurter.dev`, which needs no key.
+
+### Local development
+
+Put the same names in `apps/api/.dev.vars` (git-ignored) with your own dev
+values, then:
+
+```sh
+pnpm db:migrate:local
+pnpm dev     # API on :8787, web app on :5173
+```
+
 ## 2. GitHub repository secrets
 
 Settings → Secrets and variables → Actions → **Secrets**:
