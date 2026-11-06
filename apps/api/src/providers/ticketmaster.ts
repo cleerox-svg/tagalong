@@ -85,7 +85,11 @@ export interface EventSearch {
 /** Prices change: a short TTL. */
 const SEARCH_TTL = 15 * 60;
 
-export async function searchEvents(apiKey: string, s: EventSearch): Promise<EventInfo[]> {
+export async function searchEvents(
+	apiKey: string,
+	s: EventSearch,
+	opts: { fresh?: boolean } = {},
+): Promise<EventInfo[]> {
 	const params = new URLSearchParams({
 		keyword: s.keyword,
 		startDateTime: `${s.date_from}T00:00:00Z`,
@@ -95,21 +99,37 @@ export async function searchEvents(apiKey: string, s: EventSearch): Promise<Even
 		locale: "*",
 	});
 	if (s.city) params.set("city", s.city);
-	return cachedJson(`tm/search?${params}`, SEARCH_TTL, async () => {
-		const body = (await tmGet(apiKey, "/events.json", params)) as {
-			_embedded?: { events?: TmEvent[] };
-		} | null;
-		return (body?._embedded?.events ?? []).map(mapEvent).filter((e): e is EventInfo => e !== null);
-	});
+	return cachedJson(
+		`tm/search?${params}`,
+		SEARCH_TTL,
+		async () => {
+			const body = (await tmGet(apiKey, "/events.json", params)) as {
+				_embedded?: { events?: TmEvent[] };
+			} | null;
+			return (body?._embedded?.events ?? [])
+				.map(mapEvent)
+				.filter((e): e is EventInfo => e !== null);
+		},
+		opts,
+	);
 }
 
-export async function getEvent(apiKey: string, id: string): Promise<EventInfo | null> {
-	return cachedJson(`tm/event/${encodeURIComponent(id)}`, SEARCH_TTL, async () => {
-		const body = (await tmGet(
-			apiKey,
-			`/events/${encodeURIComponent(id)}.json`,
-			new URLSearchParams({ locale: "*" }),
-		)) as TmEvent | null;
-		return body ? mapEvent(body) : null;
-	});
+export async function getEvent(
+	apiKey: string,
+	id: string,
+	opts: { fresh?: boolean } = {},
+): Promise<EventInfo | null> {
+	return cachedJson(
+		`tm/event/${encodeURIComponent(id)}`,
+		SEARCH_TTL,
+		async () => {
+			const body = (await tmGet(
+				apiKey,
+				`/events/${encodeURIComponent(id)}.json`,
+				new URLSearchParams({ locale: "*" }),
+			)) as TmEvent | null;
+			return body ? mapEvent(body) : null;
+		},
+		opts,
+	);
 }

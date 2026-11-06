@@ -29,6 +29,8 @@ const cand = (over: Partial<Candidate>): Candidate => {
 		transport_mode: "drive",
 		lodging_type: "hotel",
 		nights: 1,
+		check_in: "2027-03-12",
+		check_out: "2027-03-13",
 		travel_hours: 8,
 		international: true,
 		items: [],

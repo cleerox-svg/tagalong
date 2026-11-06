@@ -38,6 +38,32 @@ pnpm exec wrangler secret put GOOGLE_MAPS_API_KEY
 Until these are set, `/health` stays green but sign-in and planning answer
 "not configured".
 
+## 1b. Live prices (phase 2)
+
+Optional: without them, flights and hotels stay labelled estimates and each
+plan says "live prices aren't switched on yet". Add them when the accounts
+exist:
+
+```sh
+cd apps/api
+pnpm exec wrangler secret put DUFFEL_ACCESS_TOKEN
+pnpm exec wrangler secret put BOOKING_API_TOKEN
+pnpm exec wrangler secret put BOOKING_AFFILIATE_ID
+```
+
+| Secret                 | Where it comes from                                                                                                                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DUFFEL_ACCESS_TOKEN`  | app.duffel.com → Developers → Access tokens. A `duffel_test_…` token works straight away and returns sandbox offers (e.g. "Duffel Airways"); switch to a `duffel_live_…` token once the account is verified. |
+| `BOOKING_API_TOKEN`    | Booking.com Demand API, from the affiliate partner account (requires an approved partnership).                                                                                                               |
+| `BOOKING_AFFILIATE_ID` | The same Booking.com affiliate account.                                                                                                                                                                      |
+
+To try Booking.com's sandbox, change `BOOKING_API_BASE` in
+`apps/api/wrangler.jsonc` to `https://demandapi-sandbox.booking.com/3.1` in a
+PR. It is not a secret.
+
+Budgetrip shows these prices and links out; it never books through Duffel or
+Booking.com (spec §2.2).
+
 Exchange rates come from the European Central Bank's daily reference rates via
 `api.frankfurter.dev`, which needs no key.
 

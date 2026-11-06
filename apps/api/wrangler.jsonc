@@ -23,6 +23,9 @@
 		"ENVIRONMENT": "production",
 		// Overwritten at deploy time with --var GIT_SHA:<sha>; /health serves it.
 		"GIT_SHA": "dev",
+		// Booking.com Demand API. Point at https://demandapi-sandbox.booking.com/3.1
+		// to try the sandbox.
+		"BOOKING_API_BASE": "https://demandapi.booking.com/3.1",
 	},
 
 	"d1_databases": [

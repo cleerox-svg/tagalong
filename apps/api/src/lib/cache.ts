@@ -7,11 +7,13 @@ export async function cachedJson<T>(
 	key: string,
 	ttlSeconds: number,
 	load: () => Promise<T>,
+	/** Skip the read (still refresh the entry): "re-check price" must not see a cached price. */
+	opts: { fresh?: boolean } = {},
 ): Promise<T> {
 	const cache =
 		typeof caches !== "undefined" ? (caches as unknown as { default?: Cache }).default : undefined;
 	const req = new Request(`https://provider-cache.tagalong.internal/${key}`);
-	if (cache) {
+	if (cache && !opts.fresh) {
 		const hit = await cache.match(req);
 		if (hit) return (await hit.json()) as T;
 	}
@@ -36,3 +38,6 @@ export class ProviderError extends Error {
 		this.name = "ProviderError";
 	}
 }
+
+/** Aborts a provider call that takes longer than `ms`; the caller falls back to an estimate. */
+export const timeoutSignal = (ms: number): AbortSignal => AbortSignal.timeout(ms);

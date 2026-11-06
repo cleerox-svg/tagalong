@@ -161,6 +161,10 @@ export interface Candidate {
 	transport_mode: TransportMode;
 	lodging_type: LodgingType;
 	nights: number;
+	/** Travel out / stay from (YYYY-MM-DD). Equal to the event date for a day trip. */
+	check_in: string;
+	/** Travel back / leave (YYYY-MM-DD). */
+	check_out: string;
 	/** One-way door-to-door hours. */
 	travel_hours: number;
 	international: boolean;

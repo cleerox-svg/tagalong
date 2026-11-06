@@ -10,6 +10,7 @@ import {
 	buildCandidates,
 	type Candidate,
 	type EventInfo,
+	type LivePrices,
 	ESTIMATES_AS_OF,
 	ESTIMATES_CURRENCY,
 	ESTIMATES_VERSION,
@@ -25,6 +26,7 @@ import { newId, nowIso } from "../lib/http.js";
 import { searchCities } from "../providers/google-places.js";
 import { getEvent, searchEvents } from "../providers/ticketmaster.js";
 import { loadFx } from "./fx.js";
+import { gatherLive, type LiveResult } from "./live.js";
 
 /** A user-facing failure. Its message is shown as-is. */
 class PlanFailure extends Error {}
@@ -103,7 +105,12 @@ function summary(p: RankedPackage, e: EventInfo): string {
 	return `${e.name} on ${e.local_date}: ${c.ticket_tier} seats, ${c.transport_mode} (~${c.travel_hours} h each way), ${stay}. About ${total} all in.`;
 }
 
-export async function runPlan(env: Env, planId: string): Promise<void> {
+export interface RunOptions {
+	/** Re-check: bypass cached provider responses so every price is fetched again. */
+	fresh?: boolean;
+}
+
+export async function runPlan(env: Env, planId: string, opts: RunOptions = {}): Promise<void> {
 	const db = env.DB;
 	try {
 		const plan = await db
@@ -141,17 +148,21 @@ export async function runPlan(env: Env, planId: string): Promise<void> {
 
 		await setProgress(db, planId, "running", "Finding your event…");
 		const fetchedAt = nowIso();
-		const found = await searchEvents(env.TICKETMASTER_API_KEY, {
-			keyword: request.event.query,
-			city: request.event.city,
-			date_from: request.date_from,
-			date_to: request.date_to,
-		});
+		const found = await searchEvents(
+			env.TICKETMASTER_API_KEY,
+			{
+				keyword: request.event.query,
+				city: request.event.city,
+				date_from: request.date_from,
+				date_to: request.date_to,
+			},
+			opts,
+		);
 		let primary: EventInfo | undefined;
 		if (request.event.ticketmaster_event_id) {
 			primary =
 				found.find((e) => e.provider_event_id === request.event.ticketmaster_event_id) ??
-				(await getEvent(env.TICKETMASTER_API_KEY, request.event.ticketmaster_event_id)) ??
+				(await getEvent(env.TICKETMASTER_API_KEY, request.event.ticketmaster_event_id, opts)) ??
 				undefined;
 		} else {
 			primary = found[0];
@@ -180,34 +191,32 @@ export async function runPlan(env: Env, planId: string): Promise<void> {
 		await setProgress(db, planId, "running", "Pricing tickets, travel and places to stay…");
 		const currencies = new Set([request.budget.currency, ESTIMATES_CURRENCY]);
 		for (const e of events) if (e.price_range) currencies.add(e.price_range.currency);
-		let fx;
-		try {
-			fx = await loadFx(db, currencies);
-		} catch (err) {
-			if (err instanceof ProviderError) {
-				throw new PlanFailure(
-					`We could not get exchange rates for ${[...currencies].join(", ")} right now. Try again shortly.`,
-				);
-			}
-			throw err;
-		}
-
-		const candidates: Candidate[] = [];
-		for (const e of events) {
-			const venue = await resolveVenue(env, e);
-			if (!venue) continue;
+		const loadRates = async (cur: Set<string>) => {
 			try {
-				candidates.push(
-					...buildCandidates({
-						request,
-						event: e,
-						event_id: ids.get(e.provider_event_id) as string,
-						venue,
-						is_alternative_event: e !== primary,
-						fx,
-						fetched_at: fetchedAt,
-					}),
-				);
+				return await loadFx(db, cur);
+			} catch (err) {
+				if (err instanceof ProviderError) {
+					throw new PlanFailure(
+						`We could not get exchange rates for ${[...cur].join(", ")} right now. Try again shortly.`,
+					);
+				}
+				throw err;
+			}
+		};
+		let fx = await loadRates(currencies);
+
+		const build = (e: EventInfo, venue: Venue, live?: LivePrices): Candidate[] => {
+			try {
+				return buildCandidates({
+					request,
+					event: e,
+					event_id: ids.get(e.provider_event_id) as string,
+					venue,
+					is_alternative_event: e !== primary,
+					fx,
+					fetched_at: fetchedAt,
+					...(live ? { live } : {}),
+				});
 			} catch (err) {
 				if (err instanceof MissingRateError) {
 					throw new PlanFailure(
@@ -216,6 +225,28 @@ export async function runPlan(env: Env, planId: string): Promise<void> {
 				}
 				throw err;
 			}
+		};
+
+		const candidates: Candidate[] = [];
+		let liveStatus: LiveResult["status"] = { flights: "not_needed", hotels: "not_needed" };
+		for (const e of events) {
+			const venue = await resolveVenue(env, e);
+			if (!venue) continue;
+			if (e !== primary) {
+				// Alternative dates keep estimates: live lookups are spent on the event asked for.
+				candidates.push(...build(e, venue));
+				continue;
+			}
+			const base = build(e, venue);
+			await setProgress(db, planId, "running", "Checking live flight and hotel prices…");
+			const live = await gatherLive(env, request, venue, base, opts);
+			liveStatus = live.status;
+			const extra = [...live.currencies].filter((c) => !currencies.has(c));
+			if (extra.length > 0) {
+				for (const c of extra) currencies.add(c);
+				fx = await loadRates(currencies);
+			}
+			candidates.push(...build(e, venue, live.live));
 		}
 		if (candidates.length === 0) {
 			throw new PlanFailure(
@@ -302,6 +333,8 @@ export async function runPlan(env: Env, planId: string): Promise<void> {
 			cheapest_over_budget_minor: ranked.cheapest_over_budget_minor,
 			fx: usedRates,
 			estimates: { version: ESTIMATES_VERSION, as_of: ESTIMATES_AS_OF },
+			live: liveStatus,
+			prices_checked_at: fetchedAt,
 			other_events: others.map((e) => ({
 				ticketmaster_event_id: e.provider_event_id,
 				name: e.name,

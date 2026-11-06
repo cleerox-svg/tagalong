@@ -101,6 +101,33 @@ plans.post("/plans", ...signedIn, requireAdult, async (c) => {
 	return c.json({ id: planId, status: "queued" }, 202);
 });
 
+/**
+ * Re-check prices: a new run of the same trip request that skips cached
+ * provider responses. The new plan links back so the app can show the change.
+ */
+plans.post("/plans/:id/recheck", ...signedIn, requireAdult, async (c) => {
+	const prev = await c.env.DB.prepare(
+		"SELECT id, trip_request_id, status FROM plans WHERE id = ? AND user_id = ?",
+	)
+		.bind(c.req.param("id"), c.get("userId"))
+		.first<{ id: string; trip_request_id: string; status: string }>();
+	if (!prev) throw new HttpError(404, "not_found", "No such plan.");
+	if (prev.status === "queued" || prev.status === "running") {
+		throw new HttpError(409, "busy", "This plan is still running.");
+	}
+	await rateLimit(c.env.DB, `plan:${c.get("userId")}`, 20, 3600);
+
+	const planId = newId();
+	await c.env.DB.prepare(
+		`INSERT INTO plans (id, user_id, trip_request_id, status, progress, rechecked_from)
+		 VALUES (?, ?, ?, 'queued', 'Re-checking prices…', ?)`,
+	)
+		.bind(planId, c.get("userId"), prev.trip_request_id, prev.id)
+		.run();
+	c.executionCtx.waitUntil(runPlan(c.env, planId, { fresh: true }));
+	return c.json({ id: planId, status: "queued" }, 202);
+});
+
 plans.get("/plans", ...signedIn, async (c) => {
 	const { results } = await c.env.DB.prepare(
 		`SELECT p.id, p.status, p.created_at, t.event_query, t.origin_city, e.name AS event_name, e.local_date
@@ -116,7 +143,7 @@ plans.get("/plans/:id", ...signedIn, async (c) => {
 	const id = c.req.param("id");
 	// Scoped by user_id in the query itself: someone else's plan is a 404, not a 403.
 	const plan = await c.env.DB.prepare(
-		`SELECT p.id, p.status, p.progress, p.error, p.result_json, p.created_at, p.updated_at,
+		`SELECT p.id, p.status, p.progress, p.error, p.result_json, p.created_at, p.updated_at, p.rechecked_from,
 		   t.origin_city, t.origin_lat, t.origin_lng, t.origin_country, t.event_query, t.event_city AS requested_event_city, t.date_from, t.date_to, t.party_size,
 		   t.budget_minor, t.budget_currency, t.budget_scope, t.prefs_json,
 		   e.id AS event_id, e.name AS event_name, e.venue_name, e.city AS event_city, e.country AS event_country,
@@ -155,11 +182,38 @@ plans.get("/plans/:id", ...signedIn, async (c) => {
 		}));
 	}
 
+	// What the plan this one re-checks cost, per label, for "was X, now Y".
+	let previous: unknown = null;
+	if (plan.rechecked_from) {
+		const prev = await c.env.DB.prepare(
+			"SELECT id, created_at, result_json FROM plans WHERE id = ? AND user_id = ?",
+		)
+			.bind(plan.rechecked_from, c.get("userId"))
+			.first<{ id: string; created_at: string; result_json: string | null }>();
+		if (prev) {
+			const { results: prevPkgs } = await c.env.DB.prepare(
+				`SELECT k.label, k.total_minor, k.currency FROM packages k JOIN plans p ON p.id = k.plan_id
+				 WHERE k.plan_id = ? AND p.user_id = ? ORDER BY k.rank`,
+			)
+				.bind(prev.id, c.get("userId"))
+				.all<{ label: string; total_minor: number; currency: string }>();
+			const prevResult = prev.result_json
+				? (JSON.parse(prev.result_json) as { prices_checked_at?: string })
+				: null;
+			previous = {
+				id: prev.id,
+				prices_checked_at: prevResult?.prices_checked_at ?? prev.created_at,
+				packages: prevPkgs,
+			};
+		}
+	}
+
 	const { result_json, prefs_json, ...rest } = plan;
 	return c.json({
 		...rest,
 		prefs: JSON.parse(String(prefs_json)),
 		result: result_json ? JSON.parse(String(result_json)) : null,
+		previous,
 		packages,
 	});
 });

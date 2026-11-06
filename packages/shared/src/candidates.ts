@@ -49,7 +49,35 @@ export interface BuildInput {
 	fx: FxTable;
 	/** When the provider data (event, prices) was fetched. */
 	fetched_at: string;
+	/**
+	 * Live prices from booking sources, keyed by stay window (windowKey). Where
+	 * one exists it replaces the estimate for that line; where none does, the
+	 * labelled estimate stays.
+	 */
+	live?: LivePrices;
 }
+
+export interface LivePrices {
+	/** Round-trip flights for the whole party, out on check-in, back on check-out. */
+	flights?: ReadonlyMap<string, CandidateItem>;
+	/**
+	 * A hotel stay for the whole party: the live price, plus an estimate line
+	 * for any charges the source says it leaves out.
+	 */
+	hotels?: ReadonlyMap<string, readonly CandidateItem[]>;
+}
+
+/** Dates of a stay of `nights` nights around an event: the night of the event is the last. */
+export function stayWindow(
+	localDate: string,
+	nights: number,
+): { check_in: string; check_out: string } {
+	const check_in = addDays(localDate, -Math.max(0, nights - 1));
+	return { check_in, check_out: addDays(check_in, Math.max(1, nights)) };
+}
+
+export const windowKey = (w: { check_in: string; check_out: string }) =>
+	`${w.check_in}|${w.check_out}`;
 
 const usd = (major: number): { amount_minor: number; currency: string } => ({
 	amount_minor: majorToMinor(major, ESTIMATES_CURRENCY),
@@ -196,14 +224,16 @@ function transportItems(
 		case "fly": {
 			const fare = EST.fareBaseUsd + EST.fareUsdPerKm * km;
 			const transfers = EST.airportTransferUsdPerLeg * 4;
+			const live = input.live?.flights?.get(windowKey({ check_in: checkIn, check_out: checkOut }));
 			return [
-				estimate(
-					"transport",
-					`Round-trip flights × ${party}`,
-					fare * party,
-					`${fmtUsd(EST.fareBaseUsd)} + ${fmtUsd(EST.fareUsdPerKm)} × ${km} km straight-line = ${fmtUsd(fare)} per person, economy`,
-					`https://www.google.com/travel/flights?q=${enc(`Flights to ${venue.city} from ${origin.label} on ${checkIn} through ${checkOut}`)}`,
-				),
+				live ??
+					estimate(
+						"transport",
+						`Round-trip flights × ${party}`,
+						fare * party,
+						`${fmtUsd(EST.fareBaseUsd)} + ${fmtUsd(EST.fareUsdPerKm)} × ${km} km straight-line = ${fmtUsd(fare)} per person, economy`,
+						`https://www.google.com/travel/flights?q=${enc(`Flights to ${venue.city} from ${origin.label} on ${checkIn} through ${checkOut}`)}`,
+					),
 				estimate(
 					"transport",
 					"Airport transfers",
@@ -243,6 +273,13 @@ function lodgingItems(
 	const units = lodgingUnits(stay, party);
 	const perUnit = lodgingUsdPerUnitNight(stay) * idx;
 	const base = perUnit * units * nights;
+	const live =
+		stay === "hotel"
+			? input.live?.hotels?.get(windowKey({ check_in: checkIn, check_out: checkOut }))
+			: undefined;
+	// Live lines replace both the stay and the tax estimate; the caller adds
+	// back an estimate for charges the source excludes.
+	if (live && live.length > 0) return [...live];
 	const unitWord = stay === "hotel" ? "room" : stay === "rental" ? "unit" : "bed";
 	const url =
 		stay === "rental"
@@ -324,8 +361,7 @@ export function buildCandidates(input: BuildInput): Candidate[] {
 			(n) => n <= maxNights,
 		);
 		for (const nights of nightOptions) {
-			const checkIn = addDays(event.local_date, -Math.max(0, nights - 1));
-			const checkOut = addDays(checkIn, Math.max(1, nights));
+			const { check_in: checkIn, check_out: checkOut } = stayWindow(event.local_date, nights);
 			const stays: LodgingType[] = nights === 0 ? ["none"] : [...STAY_TYPES];
 			for (const stay of stays) {
 				for (const [tier, ticketLines] of tickets) {
@@ -350,6 +386,8 @@ export function buildCandidates(input: BuildInput): Candidate[] {
 						transport_mode: t.mode,
 						lodging_type: stay,
 						nights,
+						check_in: checkIn,
+						check_out: checkOut,
 						travel_hours: round1(t.oneWayHours),
 						international,
 						items,

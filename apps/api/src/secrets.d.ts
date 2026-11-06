@@ -11,6 +11,13 @@ interface WorkerSecrets {
 	TICKETMASTER_API_KEY: string;
 	/** Google Maps Platform key with the Places API (New) enabled. */
 	GOOGLE_MAPS_API_KEY: string;
+	/**
+	 * Phase 2 live prices. Optional: without them those lines stay labelled
+	 * estimates. A Duffel test token (duffel_test_...) returns sandbox offers.
+	 */
+	DUFFEL_ACCESS_TOKEN?: string;
+	BOOKING_API_TOKEN?: string;
+	BOOKING_AFFILIATE_ID?: string;
 }
 
 declare namespace Cloudflare {

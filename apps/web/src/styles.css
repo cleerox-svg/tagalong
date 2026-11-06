@@ -312,3 +312,21 @@ legend {
 a {
 	color: var(--brand);
 }
+.recheck {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 12px;
+	align-items: center;
+	margin-top: 8px;
+}
+.change {
+	margin: 4px 0 0;
+	font-size: 0.9rem;
+	color: var(--muted);
+}
+.change.down {
+	color: var(--brand);
+}
+.change.up {
+	color: var(--est);
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCandidates } from "./candidates.js";
+import { buildCandidates, stayWindow, windowKey } from "./candidates.js";
 import { FxTable } from "./money.js";
 import type { EventInfo, TripRequest } from "./types.js";
 
@@ -139,5 +139,86 @@ describe("buildCandidates", () => {
 			fetched_at: "2026-11-06T10:00:00Z",
 		});
 		expect(cs.some((c) => c.nights === 0 && c.lodging_type === "none")).toBe(true);
+	});
+});
+
+describe("live prices", () => {
+	const liveItem = (
+		kind: "transport" | "lodging",
+		provider: string,
+		amount_minor: number,
+	): import("./types.js").CandidateItem => ({
+		kind,
+		title: `${provider} live`,
+		provider,
+		provider_ref: "ref",
+		amount_minor,
+		currency: "USD",
+		is_estimate: false,
+		booking_url: "https://example.com",
+		fetched_at: "2026-11-06T10:00:00Z",
+		method: "live",
+	});
+
+	it("replaces the fare estimate for the matching window and keeps airport transfers", () => {
+		const base = build();
+		const fly = base.find(
+			(c) => c.transport_mode === "fly" && c.nights === 1 && c.lodging_type === "hotel",
+		);
+		expect(fly).toBeDefined();
+		const key = windowKey({ check_in: fly!.check_in, check_out: fly!.check_out });
+		const cs = buildCandidates({
+			request: req(),
+			event: event(),
+			event_id: "ev1",
+			venue: msg,
+			is_alternative_event: false,
+			fx,
+			fetched_at: "2026-11-06T10:00:00Z",
+			live: { flights: new Map([[key, liveItem("transport", "duffel", 31234)]]) },
+		});
+		const same = cs.find((c) => c.id === fly!.id)!;
+		const transport = same.items.filter((i) => i.kind === "transport");
+		expect(transport.map((i) => i.provider)).toEqual(["duffel", "estimate"]);
+		expect(transport[1]?.title).toBe("Airport transfers");
+		// Other windows keep the estimate.
+		const other = cs.find((c) => c.transport_mode === "fly" && c.check_in !== fly!.check_in);
+		expect(other?.items.find((i) => i.kind === "transport")?.provider).toBe("estimate");
+	});
+
+	it("replaces the hotel estimate and its tax line with one all-in live price, only for hotels", () => {
+		const base = build();
+		const hotel = base.find((c) => c.lodging_type === "hotel" && c.nights === 1)!;
+		const key = windowKey({ check_in: hotel.check_in, check_out: hotel.check_out });
+		const cs = buildCandidates({
+			request: req(),
+			event: event(),
+			event_id: "ev1",
+			venue: msg,
+			is_alternative_event: false,
+			fx,
+			fetched_at: "2026-11-06T10:00:00Z",
+			live: { hotels: new Map([[key, [liveItem("lodging", "booking.com", 20000)]]]) },
+		});
+		const lodging = cs.find((c) => c.id === hotel.id)!.items.filter((i) => i.kind === "lodging");
+		expect(lodging).toHaveLength(1);
+		expect(lodging[0]).toMatchObject({ provider: "booking.com", is_estimate: false });
+		const hostel = cs.find((c) => c.lodging_type === "hostel" && c.nights === 1)!;
+		expect(hostel.items.filter((i) => i.kind === "lodging").every((i) => i.is_estimate)).toBe(true);
+	});
+
+	it("puts the event night last in the stay window", () => {
+		expect(stayWindow("2027-03-12", 1)).toEqual({
+			check_in: "2027-03-12",
+			check_out: "2027-03-13",
+		});
+		expect(stayWindow("2027-03-12", 2)).toEqual({
+			check_in: "2027-03-11",
+			check_out: "2027-03-13",
+		});
+		expect(stayWindow("2027-03-12", 0)).toEqual({
+			check_in: "2027-03-12",
+			check_out: "2027-03-13",
+		});
 	});
 });

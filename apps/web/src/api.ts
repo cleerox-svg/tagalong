@@ -107,6 +107,9 @@ export interface Plan {
 		cheapest_over_budget_minor: number | null;
 		fx: Array<{ from: string; to: string; rate: number; as_of: string }>;
 		estimates: { version: string; as_of: string };
+		/** Phase 2: where flight and hotel prices came from. Absent on phase 1 plans. */
+		live?: { flights: LiveStatus; hotels: LiveStatus };
+		prices_checked_at?: string;
 		other_events: Array<{
 			ticketmaster_event_id: string;
 			name: string;
@@ -115,8 +118,17 @@ export interface Plan {
 			city: string | null;
 		}>;
 	} | null;
+	rechecked_from: string | null;
+	previous: {
+		id: string;
+		prices_checked_at: string;
+		packages: Array<{ label: PlanPackage["label"]; total_minor: number; currency: string }>;
+	} | null;
 	packages: PlanPackage[];
 }
+
+export type LiveStatus =
+	"live" | "partial" | "no_offers" | "unavailable" | "not_configured" | "not_needed";
 
 export const api = {
 	me: () => request<Me>("/me"),
@@ -132,6 +144,11 @@ export const api = {
 	createPlan: (r: TripRequest) =>
 		request<{ id: string }>("/plans", { method: "POST", body: JSON.stringify(r) }),
 	plan: (id: string) => request<Plan>(`/plans/${encodeURIComponent(id)}`),
+	recheck: (id: string) =>
+		request<{ id: string }>(`/plans/${encodeURIComponent(id)}/recheck`, {
+			method: "POST",
+			body: "{}",
+		}),
 	plans: () =>
 		request<{
 			plans: Array<{
