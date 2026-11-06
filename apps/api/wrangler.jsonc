@@ -26,7 +26,12 @@
 		// Booking.com Demand API. Point at https://demandapi-sandbox.booking.com/3.1
 		// to try the sandbox.
 		"BOOKING_API_BASE": "https://demandapi.booking.com/3.1",
+		// Sender for price-drop emails; the domain must be verified in Resend.
+		"ALERT_FROM_EMAIL": "Budgetrip <alerts@averrow.com>",
 	},
+
+	// Scheduled price checks for saved trips (phase 3). Every 6 hours at :23.
+	"triggers": { "crons": ["23 */6 * * *"] },
 
 	"d1_databases": [
 		{

@@ -9,6 +9,7 @@ import { requireTrustedWrite } from "../lib/security.js";
 import { parseTripText } from "../providers/anthropic.js";
 import { searchCities } from "../providers/google-places.js";
 import { runPlan } from "../planning/run.js";
+import { loadPlan } from "../planning/view.js";
 
 export const plans = new Hono<AppEnv>();
 
@@ -140,80 +141,7 @@ plans.get("/plans", ...signedIn, async (c) => {
 });
 
 plans.get("/plans/:id", ...signedIn, async (c) => {
-	const id = c.req.param("id");
-	// Scoped by user_id in the query itself: someone else's plan is a 404, not a 403.
-	const plan = await c.env.DB.prepare(
-		`SELECT p.id, p.status, p.progress, p.error, p.result_json, p.created_at, p.updated_at, p.rechecked_from,
-		   t.origin_city, t.origin_lat, t.origin_lng, t.origin_country, t.event_query, t.event_city AS requested_event_city, t.date_from, t.date_to, t.party_size,
-		   t.budget_minor, t.budget_currency, t.budget_scope, t.prefs_json,
-		   e.id AS event_id, e.name AS event_name, e.venue_name, e.city AS event_city, e.country AS event_country,
-		   e.local_date, e.starts_at, e.url AS event_url, e.fetched_at AS event_fetched_at
-		 FROM plans p JOIN trip_requests t ON t.id = p.trip_request_id LEFT JOIN events e ON e.id = p.event_id
-		 WHERE p.id = ? AND p.user_id = ?`,
-	)
-		.bind(id, c.get("userId"))
-		.first<Record<string, unknown>>();
+	const plan = await loadPlan(c.env.DB, c.req.param("id"), c.get("userId"));
 	if (!plan) throw new HttpError(404, "not_found", "No such plan.");
-
-	let packages: unknown[] = [];
-	if (plan.status === "done") {
-		const { results: pkgs } = await c.env.DB.prepare(
-			`SELECT k.id, k.rank, k.label, k.total_minor, k.currency, k.score, k.summary_text, k.details_json,
-			   e.name AS event_name, e.local_date, e.venue_name, e.city AS event_city, e.url AS event_url
-			 FROM packages k JOIN plans p ON p.id = k.plan_id JOIN events e ON e.id = k.event_id
-			 WHERE k.plan_id = ? AND p.user_id = ? ORDER BY k.rank`,
-		)
-			.bind(id, c.get("userId"))
-			.all<Record<string, unknown>>();
-		const { results: items } = await c.env.DB.prepare(
-			`SELECT i.package_id, i.kind, i.title, i.provider, i.amount_minor, i.currency, i.is_estimate,
-			   i.booking_url, i.fetched_at, i.method
-			 FROM package_items i JOIN packages k ON k.id = i.package_id JOIN plans p ON p.id = k.plan_id
-			 WHERE k.plan_id = ? AND p.user_id = ? ORDER BY k.rank, i.position`,
-		)
-			.bind(id, c.get("userId"))
-			.all<Record<string, unknown>>();
-		packages = pkgs.map(({ details_json, ...k }) => ({
-			...k,
-			details: JSON.parse(String(details_json)),
-			items: items
-				.filter((i) => i.package_id === k.id)
-				.map(({ package_id: _p, is_estimate, ...i }) => ({ ...i, is_estimate: is_estimate === 1 })),
-		}));
-	}
-
-	// What the plan this one re-checks cost, per label, for "was X, now Y".
-	let previous: unknown = null;
-	if (plan.rechecked_from) {
-		const prev = await c.env.DB.prepare(
-			"SELECT id, created_at, result_json FROM plans WHERE id = ? AND user_id = ?",
-		)
-			.bind(plan.rechecked_from, c.get("userId"))
-			.first<{ id: string; created_at: string; result_json: string | null }>();
-		if (prev) {
-			const { results: prevPkgs } = await c.env.DB.prepare(
-				`SELECT k.label, k.total_minor, k.currency FROM packages k JOIN plans p ON p.id = k.plan_id
-				 WHERE k.plan_id = ? AND p.user_id = ? ORDER BY k.rank`,
-			)
-				.bind(prev.id, c.get("userId"))
-				.all<{ label: string; total_minor: number; currency: string }>();
-			const prevResult = prev.result_json
-				? (JSON.parse(prev.result_json) as { prices_checked_at?: string })
-				: null;
-			previous = {
-				id: prev.id,
-				prices_checked_at: prevResult?.prices_checked_at ?? prev.created_at,
-				packages: prevPkgs,
-			};
-		}
-	}
-
-	const { result_json, prefs_json, ...rest } = plan;
-	return c.json({
-		...rest,
-		prefs: JSON.parse(String(prefs_json)),
-		result: result_json ? JSON.parse(String(result_json)) : null,
-		previous,
-		packages,
-	});
+	return c.json(plan);
 });
