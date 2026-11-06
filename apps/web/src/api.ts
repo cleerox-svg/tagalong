@@ -144,6 +144,35 @@ export const api = {
 	createPlan: (r: TripRequest) =>
 		request<{ id: string }>("/plans", { method: "POST", body: JSON.stringify(r) }),
 	plan: (id: string) => request<Plan>(`/plans/${encodeURIComponent(id)}`),
+	shared: (token: string) =>
+		request<Plan & { shared: true }>(`/shared/${encodeURIComponent(token)}`),
+	savedState: (id: string) => request<SavedState>(`/plans/${encodeURIComponent(id)}/saved`),
+	save: (id: string) =>
+		request<{ saved: true }>(`/plans/${encodeURIComponent(id)}/save`, {
+			method: "POST",
+			body: "{}",
+		}),
+	unsave: (id: string) =>
+		request<{ saved: false }>(`/plans/${encodeURIComponent(id)}/unsave`, {
+			method: "POST",
+			body: "{}",
+		}),
+	setAlerts: (id: string, enabled: boolean) =>
+		request<{ alerts_enabled: boolean }>(`/plans/${encodeURIComponent(id)}/alerts`, {
+			method: "POST",
+			body: JSON.stringify({ enabled }),
+		}),
+	share: (id: string) =>
+		request<{ share_url: string }>(`/plans/${encodeURIComponent(id)}/share`, {
+			method: "POST",
+			body: "{}",
+		}),
+	unshare: (id: string) =>
+		request<{ share_url: null }>(`/plans/${encodeURIComponent(id)}/share/revoke`, {
+			method: "POST",
+			body: "{}",
+		}),
+	trips: () => request<TripsResponse>("/trips"),
 	recheck: (id: string) =>
 		request<{ id: string }>(`/plans/${encodeURIComponent(id)}/recheck`, {
 			method: "POST",
@@ -164,3 +193,39 @@ export const api = {
 	signInUrl: () =>
 		`${API_BASE}/auth/google/start?return_to=${encodeURIComponent(window.location.href)}`,
 };
+
+export interface SavedState {
+	saved: boolean;
+	alerts_enabled: boolean;
+	share_url: string | null;
+}
+
+export interface SavedTrip {
+	plan_id: string;
+	alerts_enabled: boolean;
+	best_total_minor: number | null;
+	currency: string;
+	last_checked_at: string | null;
+	saved_at: string;
+	event_query: string;
+	origin_city: string;
+	party_size: number;
+	event_name: string | null;
+	local_date: string | null;
+	venue_name: string | null;
+	event_city: string | null;
+	status: string;
+}
+
+export interface TripsResponse {
+	trips: SavedTrip[];
+	alerts: Array<{
+		trip_request_id: string;
+		plan_id: string;
+		old_total_minor: number;
+		new_total_minor: number;
+		currency: string;
+		created_at: string;
+		emailed_at: string | null;
+	}>;
+}

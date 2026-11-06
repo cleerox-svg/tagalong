@@ -64,6 +64,28 @@ PR. It is not a secret.
 Budgetrip shows these prices and links out; it never books through Duffel or
 Booking.com (spec §2.2).
 
+## 1c. Price-drop emails (phase 3)
+
+Saved trips with alerts on are re-checked by a Cron Trigger every 6 hours
+(`23 */6 * * *` in `apps/api/wrangler.jsonc`), at most 5 trips per run and each
+trip at most every 12 hours, until its event date. A drop of 2% or more below
+the best price seen is recorded and shown under **My trips**. To also email it:
+
+1. resend.com → Domains → add `averrow.com` and create the DNS records it lists
+   (SPF/DKIM) on the averrow.com zone. Emails come from
+   `ALERT_FROM_EMAIL` in `apps/api/wrangler.jsonc` (`alerts@averrow.com`).
+2. resend.com → API Keys → create a key with **sending access** only, then:
+
+```sh
+cd apps/api
+pnpm exec wrangler secret put RESEND_API_KEY
+```
+
+Without the key, alerts are still recorded and shown in the app; nothing is
+emailed. Re-checks use the same providers as a manual re-check, so with live
+price keys set each scheduled check costs one Duffel and one Booking.com
+search per stay window.
+
 Exchange rates come from the European Central Bank's daily reference rates via
 `api.frankfurter.dev`, which needs no key.
 

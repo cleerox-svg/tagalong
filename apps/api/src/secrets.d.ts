@@ -18,6 +18,8 @@ interface WorkerSecrets {
 	DUFFEL_ACCESS_TOKEN?: string;
 	BOOKING_API_TOKEN?: string;
 	BOOKING_AFFILIATE_ID?: string;
+	/** Phase 3 price-drop emails. Optional: without it alerts are shown in the app only. */
+	RESEND_API_KEY?: string;
 }
 
 declare namespace Cloudflare {

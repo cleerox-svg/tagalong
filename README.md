@@ -12,6 +12,10 @@ Phase 2 (live prices) adds real flight prices from Duffel and hotel prices
 from Booking.com when their keys are set (falling back to labelled estimates
 otherwise), and a "Re-check prices" button.
 
+Phase 3 (saved trips) adds **Save trip** and **My trips**, read-only share
+links (`/s/<token>`, no sign-in needed, revocable), and scheduled price-drop
+checks that email through Resend when its key is set.
+
 ## Stack
 
 | Layer    | Choice                                |
