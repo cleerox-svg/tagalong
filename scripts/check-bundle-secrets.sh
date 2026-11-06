@@ -9,6 +9,7 @@
 #   2. In EVERY bundle: anything shaped like a real key - Anthropic, Google API,
 #      Google OAuth client secret, or a private key block. A key pasted into
 #      source to "just test something" is the failure this exists for.
+#      (Duffel tokens start duffel_test_ / duffel_live_.)
 #
 #   usage: check-bundle-secrets.sh <web-dist> [<other-dist>...]
 
@@ -17,8 +18,8 @@ set -euo pipefail
 WEB="${1:?usage: check-bundle-secrets.sh <web-dist> [<other-dist>...]}"
 shift || true
 
-NAMES='SESSION_SECRET|GOOGLE_CLIENT_SECRET|ANTHROPIC_API_KEY|TICKETMASTER_API_KEY|GOOGLE_MAPS_API_KEY|CLOUDFLARE_API_TOKEN'
-SHAPES='sk-ant-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|GOCSPX-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+NAMES='SESSION_SECRET|GOOGLE_CLIENT_SECRET|ANTHROPIC_API_KEY|TICKETMASTER_API_KEY|GOOGLE_MAPS_API_KEY|DUFFEL_ACCESS_TOKEN|BOOKING_API_TOKEN|CLOUDFLARE_API_TOKEN'
+SHAPES='sk-ant-[A-Za-z0-9_-]{20,}|duffel_(test|live)_[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|GOCSPX-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 
 FAIL=0
 

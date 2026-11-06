@@ -8,6 +8,10 @@ Phase 1 (Budgetrip MVP) is in: Google sign-in → a trip request (form or free
 text, confirmed by the user) → a Ticketmaster event lookup → transport and
 lodging as labelled estimates → up to five ranked packages under budget.
 
+Phase 2 (live prices) adds real flight prices from Duffel and hotel prices
+from Booking.com when their keys are set (falling back to labelled estimates
+otherwise), and a "Re-check prices" button.
+
 ## Stack
 
 | Layer    | Choice                                |

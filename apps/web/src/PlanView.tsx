@@ -1,6 +1,13 @@
 import { formatMoney, type TripRequest } from "@tagalong/shared";
 import { useEffect, useState } from "react";
-import { api, ApiError, type Plan, type PlanItem, type PlanPackage } from "./api.js";
+import {
+	api,
+	ApiError,
+	type LiveStatus,
+	type Plan,
+	type PlanItem,
+	type PlanPackage,
+} from "./api.js";
 import { navigate } from "./router.js";
 
 const LABELS: Record<PlanPackage["label"], string> = {
@@ -12,6 +19,37 @@ const LABELS: Record<PlanPackage["label"], string> = {
 };
 
 const money = (amount_minor: number, currency: string) => formatMoney({ amount_minor, currency });
+
+const SOURCES: Record<string, string> = {
+	ticketmaster: "Ticketmaster",
+	duffel: "Duffel · live",
+	"booking.com": "Booking.com · live",
+};
+
+function linkText(i: PlanItem): string {
+	if (i.kind === "ticket") return "Tickets";
+	if (i.provider === "booking.com") return "Book on Booking.com";
+	if (i.provider === "duffel") return "Find these flights";
+	return "Search";
+}
+
+const LIVE_TEXT: Record<LiveStatus, string> = {
+	live: "live prices",
+	partial: "live prices for some dates, estimates for the rest",
+	no_offers: "estimates (no live offers for these dates)",
+	unavailable: "estimates (live prices didn't answer in time; re-check to try again)",
+	not_configured: "estimates (live prices aren't switched on yet)",
+	not_needed: "",
+};
+
+function LiveLine({ live }: { live: NonNullable<Plan["result"]>["live"] }) {
+	if (!live) return null;
+	const parts = [
+		live.flights !== "not_needed" && `Flights: ${LIVE_TEXT[live.flights]}.`,
+		live.hotels !== "not_needed" && `Hotels: ${LIVE_TEXT[live.hotels]}.`,
+	].filter(Boolean);
+	return parts.length ? <p className="muted">{parts.join(" ")}</p> : null;
+}
 const when = (iso: string) =>
 	new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
@@ -29,14 +67,14 @@ function Item({ i, home }: { i: PlanItem; home: string }) {
 				{i.is_estimate ? (
 					<span className="badge est">estimate</span>
 				) : (
-					<span className="badge src">{i.provider}</span>
+					<span className="badge src">{SOURCES[i.provider] ?? i.provider}</span>
 				)}
 				<span className="muted">
 					{i.is_estimate ? "table as of" : "as of"} {when(i.fetched_at)}
 				</span>
 				{i.booking_url && (
 					<a href={i.booking_url} target="_blank" rel="noopener noreferrer">
-						{i.kind === "ticket" ? "Tickets" : "Search"} ↗
+						{linkText(i)} ↗
 					</a>
 				)}
 			</div>
@@ -48,13 +86,27 @@ function Item({ i, home }: { i: PlanItem; home: string }) {
 	);
 }
 
-function Package({ p }: { p: PlanPackage }) {
+function Package({
+	p,
+	was,
+}: {
+	p: PlanPackage;
+	was?: { total_minor: number; currency: string } | undefined;
+}) {
+	const diff = was && was.currency === p.currency ? p.total_minor - was.total_minor : null;
 	return (
 		<article className="card package">
 			<header>
 				<span className="label">{LABELS[p.label]}</span>
 				<span className="total">{money(p.total_minor, p.currency)}</span>
 			</header>
+			{diff !== null && was && (
+				<p className={diff < 0 ? "change down" : diff > 0 ? "change up" : "change"}>
+					{diff === 0
+						? "Same as last check"
+						: `${diff < 0 ? "Down" : "Up"} ${money(Math.abs(diff), p.currency)} from ${money(was.total_minor, was.currency)}`}
+				</p>
+			)}
 			<p>{p.summary_text}</p>
 			{p.details.passport_needed && <p className="note">Crossing a border: bring your passport.</p>}
 			{p.details.is_alternative_event && <p className="note">A different date for this event.</p>}
@@ -95,6 +147,7 @@ function requestFrom(plan: Plan, pinned: string): TripRequest {
 export function PlanView({ id }: { id: string }) {
 	const [plan, setPlan] = useState<Plan | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [rechecking, setRechecking] = useState(false);
 
 	useEffect(() => {
 		let stop = false;
@@ -125,6 +178,18 @@ export function PlanView({ id }: { id: string }) {
 	if (!plan) return <p className="muted">Loading…</p>;
 
 	const budget = plan.result?.budget_total_minor ?? plan.budget_minor;
+	const settled = plan.status === "done" || plan.status === "failed";
+	const recheck = async () => {
+		setRechecking(true);
+		try {
+			const { id: next } = await api.recheck(plan.id);
+			navigate(`/plans/${next}`);
+		} catch (err) {
+			setError(err instanceof ApiError ? err.message : "That didn't go through. Try again.");
+		} finally {
+			setRechecking(false);
+		}
+	};
 
 	return (
 		<>
@@ -150,6 +215,22 @@ export function PlanView({ id }: { id: string }) {
 						)}
 					</p>
 				)}
+				{plan.status === "done" && <LiveLine live={plan.result?.live} />}
+				{settled && (
+					<div className="recheck">
+						{plan.result?.prices_checked_at && (
+							<span className="muted">Prices checked {when(plan.result.prices_checked_at)}</span>
+						)}
+						{plan.previous && (
+							<span className="muted">
+								· previous check {when(plan.previous.prices_checked_at)}
+							</span>
+						)}
+						<button type="button" onClick={recheck} disabled={rechecking}>
+							{rechecking ? "Starting…" : "Re-check prices"}
+						</button>
+					</div>
+				)}
 			</section>
 
 			{plan.status === "done" && plan.packages.length === 0 && plan.result && (
@@ -173,7 +254,7 @@ export function PlanView({ id }: { id: string }) {
 			)}
 
 			{plan.packages.map((p) => (
-				<Package key={p.id} p={p} />
+				<Package key={p.id} p={p} was={plan.previous?.packages.find((x) => x.label === p.label)} />
 			))}
 
 			{plan.status === "done" && plan.result && plan.result.other_events.length > 0 && (
