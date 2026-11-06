@@ -1,0 +1,14 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	// Assets-only Worker: serves the built PWA. No code, no bindings, no secrets.
+	"name": "tagalong-web",
+	"compatibility_date": "2026-10-01",
+	"assets": {
+		"directory": "./dist",
+		// Client-side routes such as /plans/:id serve index.html.
+		"not_found_handling": "single-page-application",
+	},
+	"routes": [{ "pattern": "tagalong.averrow.com", "custom_domain": true }],
+	"workers_dev": false,
+	"preview_urls": false,
+}
