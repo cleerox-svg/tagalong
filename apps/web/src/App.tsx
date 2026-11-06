@@ -4,6 +4,7 @@ import { Onboarding } from "./Onboarding.js";
 import { Planner } from "./Planner.js";
 import { PlanView } from "./PlanView.js";
 import { navigate, usePath } from "./router.js";
+import { Trips } from "./Trips.js";
 
 type Session =
 	| { state: "loading" }
@@ -33,6 +34,12 @@ export function App() {
 	}, [load]);
 
 	const planMatch = /^\/plans\/([0-9a-f-]{36})$/.exec(path);
+	// Public read-only share links work without signing in.
+	const sharedMatch = /^\/s\/([A-Za-z0-9_-]{43})$/.exec(path);
+	const go = (to: string) => (e: React.MouseEvent) => {
+		e.preventDefault();
+		navigate(to);
+	};
 
 	return (
 		<div className="shell">
@@ -49,6 +56,9 @@ export function App() {
 				</a>
 				{session.state === "in" && (
 					<div className="who">
+						<a href="/trips" onClick={go("/trips")}>
+							My trips
+						</a>
 						<span>{session.me.display_name}</span>
 						<button
 							type="button"
@@ -65,9 +75,10 @@ export function App() {
 			</header>
 
 			<main>
-				{session.state === "loading" && <p className="muted">Loading…</p>}
-				{session.state === "error" && <p className="error">{session.message}</p>}
-				{session.state === "signed_out" && (
+				{sharedMatch?.[1] && <PlanView token={sharedMatch[1]} />}
+				{!sharedMatch && session.state === "loading" && <p className="muted">Loading…</p>}
+				{!sharedMatch && session.state === "error" && <p className="error">{session.message}</p>}
+				{!sharedMatch && session.state === "signed_out" && (
 					<section className="card hero">
 						<h1>Event trips that fit your budget</h1>
 						<p>
@@ -80,12 +91,19 @@ export function App() {
 						</a>
 					</section>
 				)}
-				{session.state === "in" && !session.me.birthdate_verified_18 && (
+				{!sharedMatch && session.state === "in" && !session.me.birthdate_verified_18 && (
 					<Onboarding me={session.me} onDone={load} />
 				)}
-				{session.state === "in" &&
+				{!sharedMatch &&
+					session.state === "in" &&
 					session.me.birthdate_verified_18 &&
-					(planMatch?.[1] ? <PlanView id={planMatch[1]} /> : <Planner me={session.me} />)}
+					(planMatch?.[1] ? (
+						<PlanView id={planMatch[1]} />
+					) : path === "/trips" ? (
+						<Trips />
+					) : (
+						<Planner me={session.me} />
+					))}
 			</main>
 
 			<footer className="foot muted">

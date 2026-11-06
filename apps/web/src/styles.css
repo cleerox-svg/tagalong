@@ -330,3 +330,58 @@ a {
 .change.up {
 	color: var(--est);
 }
+.saveshare {
+	margin-top: 12px;
+	border-top: 1px solid var(--line);
+	padding-top: 12px;
+}
+.row-inline {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 16px;
+	align-items: center;
+}
+.row-inline .check {
+	margin: 0;
+	flex: none;
+}
+.share {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+	margin-top: 10px;
+}
+.share input {
+	flex: 1 1 220px;
+	min-width: 0;
+	font-size: 0.85rem;
+}
+.share .note {
+	flex-basis: 100%;
+	margin: 0;
+}
+.banner {
+	background: var(--card);
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 8px 12px;
+}
+.trips {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+.trips li {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 12px 0;
+	border-top: 1px solid var(--line);
+}
+.trips .check {
+	margin: 0;
+	flex: none;
+}

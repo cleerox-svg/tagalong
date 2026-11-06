@@ -7,6 +7,7 @@ import {
 	type Plan,
 	type PlanItem,
 	type PlanPackage,
+	type SavedState,
 } from "./api.js";
 import { navigate } from "./router.js";
 
@@ -144,7 +145,111 @@ function requestFrom(plan: Plan, pinned: string): TripRequest {
 	};
 }
 
-export function PlanView({ id }: { id: string }) {
+function SaveShare({ planId }: { planId: string }) {
+	const [state, setState] = useState<SavedState | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [copied, setCopied] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	useEffect(() => {
+		api.savedState(planId).then(setState, () => setState(null));
+	}, [planId]);
+
+	if (!state) return null;
+	const act = async (fn: () => Promise<Partial<SavedState>>) => {
+		setBusy(true);
+		setError(null);
+		try {
+			const next = await fn();
+			setState((s) => (s ? { ...s, ...next } : s));
+		} catch (err) {
+			setError(err instanceof ApiError ? err.message : "That didn't go through. Try again.");
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	return (
+		<div className="saveshare">
+			<div className="row-inline">
+				{state.saved ? (
+					<button
+						type="button"
+						disabled={busy}
+						onClick={() =>
+							act(async () => ({ ...(await api.unsave(planId)), alerts_enabled: false }))
+						}
+					>
+						★ Saved
+					</button>
+				) : (
+					<button
+						type="button"
+						className="primary"
+						disabled={busy}
+						onClick={() => act(async () => ({ ...(await api.save(planId)), alerts_enabled: true }))}
+					>
+						☆ Save trip
+					</button>
+				)}
+				{state.saved && (
+					<label className="check">
+						<input
+							type="checkbox"
+							checked={state.alerts_enabled}
+							disabled={busy}
+							onChange={(e) => act(() => api.setAlerts(planId, e.target.checked))}
+						/>
+						Email me if the price drops
+					</label>
+				)}
+				{!state.share_url && (
+					<button type="button" disabled={busy} onClick={() => act(() => api.share(planId))}>
+						Share
+					</button>
+				)}
+			</div>
+			{state.share_url && (
+				<div className="share">
+					<input
+						readOnly
+						value={state.share_url}
+						aria-label="Share link"
+						onFocus={(e) => e.target.select()}
+					/>
+					<button
+						type="button"
+						onClick={async () => {
+							await navigator.clipboard?.writeText(state.share_url ?? "").catch(() => undefined);
+							setCopied(true);
+							setTimeout(() => setCopied(false), 1500);
+						}}
+					>
+						{copied ? "Copied" : "Copy"}
+					</button>
+					<button
+						type="button"
+						className="link"
+						disabled={busy}
+						onClick={() => act(() => api.unshare(planId))}
+					>
+						Stop sharing
+					</button>
+					<p className="note">
+						Anyone with this link can see these packages. They can't see your account or change
+						anything.
+					</p>
+				</div>
+			)}
+			{error && <p className="error">{error}</p>}
+		</div>
+	);
+}
+
+export function PlanView(props: { id: string } | { token: string }) {
+	const id = "id" in props ? props.id : null;
+	const token = "token" in props ? props.token : null;
+	const shared = token !== null;
 	const [plan, setPlan] = useState<Plan | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [rechecking, setRechecking] = useState(false);
@@ -154,7 +259,7 @@ export function PlanView({ id }: { id: string }) {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const tick = async () => {
 			try {
-				const p = await api.plan(id);
+				const p = token ? await api.shared(token) : await api.plan(id as string);
 				if (stop) return;
 				setPlan(p);
 				if (p.status === "queued" || p.status === "running") timer = setTimeout(tick, 1500);
@@ -162,7 +267,9 @@ export function PlanView({ id }: { id: string }) {
 				if (!stop)
 					setError(
 						err instanceof ApiError && err.status === 404
-							? "No such plan."
+							? token
+								? "This link doesn't work any more."
+								: "No such plan."
 							: "We can't load this plan right now.",
 					);
 			}
@@ -172,13 +279,13 @@ export function PlanView({ id }: { id: string }) {
 			stop = true;
 			if (timer) clearTimeout(timer);
 		};
-	}, [id]);
+	}, [id, token]);
 
 	if (error) return <p className="error">{error}</p>;
 	if (!plan) return <p className="muted">Loading…</p>;
 
 	const budget = plan.result?.budget_total_minor ?? plan.budget_minor;
-	const settled = plan.status === "done" || plan.status === "failed";
+	const settled = !shared && (plan.status === "done" || plan.status === "failed");
 	const recheck = async () => {
 		setRechecking(true);
 		try {
@@ -193,6 +300,20 @@ export function PlanView({ id }: { id: string }) {
 
 	return (
 		<>
+			{shared && (
+				<p className="note banner">
+					A trip someone shared with you — read only.{" "}
+					<a
+						href="/"
+						onClick={(e) => {
+							e.preventDefault();
+							navigate("/");
+						}}
+					>
+						Plan your own
+					</a>
+				</p>
+			)}
 			<section className="card">
 				<h1>{plan.event_name ?? plan.event_query}</h1>
 				<p className="muted">
@@ -231,6 +352,10 @@ export function PlanView({ id }: { id: string }) {
 						</button>
 					</div>
 				)}
+				{!shared && plan.status === "done" && <SaveShare planId={plan.id} />}
+				{shared && plan.result?.prices_checked_at && (
+					<p className="muted">Prices checked {when(plan.result.prices_checked_at)}</p>
+				)}
 			</section>
 
 			{plan.status === "done" && plan.packages.length === 0 && plan.result && (
@@ -257,7 +382,7 @@ export function PlanView({ id }: { id: string }) {
 				<Package key={p.id} p={p} was={plan.previous?.packages.find((x) => x.label === p.label)} />
 			))}
 
-			{plan.status === "done" && plan.result && plan.result.other_events.length > 0 && (
+			{!shared && plan.status === "done" && plan.result && plan.result.other_events.length > 0 && (
 				<section className="card">
 					<h2>Not the right event?</h2>
 					<ul className="others">
