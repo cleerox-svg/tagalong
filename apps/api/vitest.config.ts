@@ -17,6 +17,14 @@ export default defineConfig({
 				miniflare: {
 					bindings: {
 						TEST_MIGRATIONS: migrations,
+						// Test-only stand-ins for the Worker secrets. Every outbound
+						// provider call is mocked in the tests, so none is ever sent.
+						SESSION_SECRET: "test-session-secret-0123456789abcdef0123456789",
+						GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
+						GOOGLE_CLIENT_SECRET: "test-google-secret",
+						ANTHROPIC_API_KEY: "test-anthropic-key",
+						TICKETMASTER_API_KEY: "test-tm-key",
+						GOOGLE_MAPS_API_KEY: "test-maps-key",
 					},
 				},
 			};
