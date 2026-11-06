@@ -1,15 +1,20 @@
 # Tagalong — repo rules
 
-This repo is groundwork only. The product plan (from Matthew) has not landed
-yet; when it does, it goes in `docs/` and becomes the source of truth. Until
-then, build nothing product-specific.
+The product plan is `docs/BUILD_SPEC.md` (Budgetrip + Tagalong). It is the
+source of truth: read it before changing anything, build one phase (§9) per
+session, then stop. Its §2 principles are rules, not suggestions — in
+particular, no price ever comes from the AI, money is integer minor units plus
+an ISO 4217 currency, and the budget filter and ranking live in
+`packages/shared/src/ranking.ts` with tests.
 
 Read the actual files before changing anything. These are the rules that are
 easy to break by accident.
 
 ## Stack
 
-pnpm workspaces + Turborepo · Cloudflare Worker (Hono) in `apps/api` ·
+pnpm workspaces + Turborepo · Cloudflare Worker (Hono) in `apps/api` · Vite +
+React web app in `apps/web` (an assets-only Worker) · shared types, money and
+ranking in `packages/shared` ·
 Cloudflare D1 (`tagalong-db`, binding `DB`) · GitHub Actions for CI, deploy and
 auto-merge. Same shape as BVOM.
 
