@@ -68,6 +68,10 @@ jobs:
       - name: Lint, typecheck, test, build
         run: pnpm turbo run lint typecheck test build
 
+      # Spec §8: no secret in a built bundle, above all the one shipped to browsers.
+      - name: No secrets in built bundles
+        run: bash scripts/check-bundle-secrets.sh apps/web/dist apps/api/dist
+
       # Local D1 (Miniflare) only: no Cloudflare account or token is involved.
       - name: D1 migration dry-run
         run: |

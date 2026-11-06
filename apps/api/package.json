@@ -13,7 +13,10 @@
 		"cf-typegen": "wrangler types"
 	},
 	"dependencies": {
-		"hono": "catalog:"
+		"@anthropic-ai/sdk": "catalog:",
+		"@tagalong/shared": "workspace:*",
+		"hono": "catalog:",
+		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@tagalong/config": "workspace:*",
