@@ -23,6 +23,8 @@ const money = (amount_minor: number, currency: string) => formatMoney({ amount_m
 
 const SOURCES: Record<string, string> = {
 	ticketmaster: "Ticketmaster",
+	eventbrite: "Eventbrite",
+	url: "Event page",
 	duffel: "Duffel · live",
 	"booking.com": "Booking.com · live",
 };
@@ -131,7 +133,7 @@ function requestFrom(plan: Plan, pinned: string): TripRequest {
 		event: {
 			query: plan.event_query,
 			...(plan.requested_event_city ? { city: plan.requested_event_city } : {}),
-			ticketmaster_event_id: pinned,
+			pinned: { provider: "ticketmaster", id: pinned },
 		},
 		date_from: plan.date_from,
 		date_to: plan.date_to,

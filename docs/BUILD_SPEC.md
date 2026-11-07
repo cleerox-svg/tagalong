@@ -191,6 +191,12 @@ for a short time, venue data for longer).
 Facebook/Instagram events have no public API. Users can paste the link and we
 plan from what we can read, with a fallback to "tell us the date and city".
 
+Eventbrite retired its public event search API in 2020, so Eventbrite events
+come in by pasted link (`GET /v3/events/:id`, or the page's schema.org data
+without a token). Category browse uses Ticketmaster Discovery. A pasted page
+is read only from its schema.org Event JSON-LD, not by the AI, so any price on
+it is the page's own figure with the page named as its source.
+
 ## 8. Security
 
 - Google sign-in, an HttpOnly signed session cookie (same pattern as BVOM).

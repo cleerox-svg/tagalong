@@ -4,3 +4,4 @@ export * from "./geo.js";
 export * from "./estimates.js";
 export * from "./candidates.js";
 export * from "./ranking.js";
+export * from "./categories.js";

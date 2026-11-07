@@ -89,6 +89,29 @@ search per stay window.
 Exchange rates come from the European Central Bank's daily reference rates via
 `api.frankfurter.dev`, which needs no key.
 
+## 1d. Eventbrite links (phase 4)
+
+Optional. Pasted Eventbrite links work without it: the event page's own
+schema.org data is read instead. With a token, Budgetrip reads the event and
+its ticket price range from the Eventbrite API, which is more reliable:
+
+```sh
+cd apps/api
+pnpm exec wrangler secret put EVENTBRITE_TOKEN
+```
+
+| Secret             | Where it comes from                                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `EVENTBRITE_TOKEN` | eventbrite.com → Account settings → Developer links → API keys → create a key, then copy its **private token**. |
+
+Eventbrite retired public event search in 2020, so Eventbrite events come in by
+link only; **Browse events** searches Ticketmaster.
+
+Other pasted links are fetched from the Worker with a `BudgetripBot` user
+agent. Only public http(s) hosts on default ports are fetched (no IP addresses,
+internal names or `averrow.com`), every redirect is re-checked, and pages are
+cut off at 1.5 MB and 8 seconds.
+
 ### Local development
 
 Put the same names in `apps/api/.dev.vars` (git-ignored) with your own dev

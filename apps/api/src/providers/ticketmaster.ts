@@ -2,7 +2,14 @@
  * Ticketmaster Discovery API v2 → our EventInfo. Price ranges, when listed,
  * are face value; fees are added separately as an estimate.
  */
-import { currencyExponent, type EventInfo, isCurrencyCode } from "@tagalong/shared";
+import {
+	BROWSE_PAGE_SIZE,
+	currencyExponent,
+	type EventCategory,
+	type EventInfo,
+	geohash,
+	isCurrencyCode,
+} from "@tagalong/shared";
 import { cachedJson, ProviderError } from "../lib/cache.js";
 
 const BASE = "https://app.ticketmaster.com/discovery/v2";
@@ -132,4 +139,42 @@ export async function getEvent(
 		},
 		opts,
 	);
+}
+
+/** The Discovery event id in a ticketmaster.* event link, if it has one. */
+export function ticketmasterIdFromUrl(url: URL): string | null {
+	if (!/(^|\.)ticketmaster\.[a-z.]{2,10}$/i.test(url.hostname)) return null;
+	return /\/event\/([A-Za-z0-9]{6,64})\/?$/.exec(url.pathname)?.[1] ?? null;
+}
+
+export interface EventBrowse {
+	category: EventCategory;
+	lat: number;
+	lng: number;
+	radius_km: number;
+	date_from: string;
+	date_to: string;
+}
+
+/** Category browse: events of one kind within a radius of a city, soonest first. */
+export async function browseEvents(apiKey: string, b: EventBrowse): Promise<EventInfo[]> {
+	const params = new URLSearchParams({
+		geoPoint: geohash(b.lat, b.lng),
+		radius: String(b.radius_km),
+		unit: "km",
+		startDateTime: `${b.date_from}T00:00:00Z`,
+		endDateTime: `${b.date_to}T23:59:59Z`,
+		size: String(BROWSE_PAGE_SIZE),
+		sort: "date,asc",
+		locale: "*",
+	});
+	const f = b.category.ticketmaster;
+	if ("classificationName" in f) params.set("classificationName", f.classificationName);
+	else params.set("keyword", f.keyword);
+	return cachedJson(`tm/browse?${params}`, SEARCH_TTL, async () => {
+		const body = (await tmGet(apiKey, "/events.json", params)) as {
+			_embedded?: { events?: TmEvent[] };
+		} | null;
+		return (body?._embedded?.events ?? []).map(mapEvent).filter((e): e is EventInfo => e !== null);
+	});
 }

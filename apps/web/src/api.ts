@@ -1,4 +1,11 @@
-import type { ParsedTripRequest, Place, TripRequest } from "@tagalong/shared";
+import type {
+	EventCategoryId,
+	EventProvider,
+	ParsedTripRequest,
+	PinnedEvent,
+	Place,
+	TripRequest,
+} from "@tagalong/shared";
 
 export const API_BASE = __API_BASE__;
 
@@ -7,6 +14,7 @@ export class ApiError extends Error {
 		readonly status: number,
 		readonly code: string,
 		message: string,
+		readonly details?: unknown,
 	) {
 		super(message);
 	}
@@ -17,13 +25,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 	if (init.body) headers.set("Content-Type", "application/json");
 	const res = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "include" });
 	const body = (await res.json().catch(() => null)) as {
-		error?: { code: string; message: string };
+		error?: { code: string; message: string; details?: unknown };
 	} | null;
 	if (!res.ok)
 		throw new ApiError(
 			res.status,
 			body?.error?.code ?? "error",
 			body?.error?.message ?? `HTTP ${res.status}`,
+			body?.error?.details,
 		);
 	return body as T;
 }
@@ -143,6 +152,24 @@ export const api = {
 		}),
 	createPlan: (r: TripRequest) =>
 		request<{ id: string }>("/plans", { method: "POST", body: JSON.stringify(r) }),
+	lookupEvent: (url: string) =>
+		request<{ event: EventSummary }>("/events/lookup", {
+			method: "POST",
+			body: JSON.stringify({ url }),
+		}),
+	browseEvents: (q: {
+		category: EventCategoryId;
+		lat: number;
+		lng: number;
+		radius_km: number;
+		date_from: string;
+		date_to: string;
+	}) =>
+		request<{ events: EventSummary[] }>(
+			`/events/browse?${new URLSearchParams(
+				Object.entries(q).map(([k, v]) => [k, String(v)] as [string, string]),
+			)}`,
+		),
 	plan: (id: string) => request<Plan>(`/plans/${encodeURIComponent(id)}`),
 	shared: (token: string) =>
 		request<Plan & { shared: true }>(`/shared/${encodeURIComponent(token)}`),
@@ -193,6 +220,21 @@ export const api = {
 	signInUrl: () =>
 		`${API_BASE}/auth/google/start?return_to=${encodeURIComponent(window.location.href)}`,
 };
+
+/** An event from a pasted link or a browse, ready to pin into the form. */
+export interface EventSummary {
+	pinned: PinnedEvent;
+	provider: EventProvider;
+	name: string;
+	category: string | null;
+	venue_name: string | null;
+	city: string | null;
+	country_code: string | null;
+	local_date: string;
+	starts_at: string | null;
+	url: string | null;
+	price_range: { min_minor: number; max_minor: number; currency: string } | null;
+}
 
 export interface SavedState {
 	saved: boolean;

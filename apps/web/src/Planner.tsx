@@ -1,11 +1,27 @@
 import { SEAT_TIERS, STAY_TYPES, TRANSPORT_MODES, VIBE_TAGS, type Place } from "@tagalong/shared";
 import { useEffect, useState } from "react";
-import { api, ApiError, type Me } from "./api.js";
-import { applyParsed, emptyForm, type FormState, toTripRequest } from "./form.js";
+import { api, ApiError, type EventSummary, type Me } from "./api.js";
+import { Browse, type BrowseStart, priceText } from "./Browse.js";
+import {
+	applyParsed,
+	describeEvent,
+	emptyForm,
+	type FormState,
+	pinEvent,
+	toTripRequest,
+	unpinEvent,
+} from "./form.js";
 import { COMMON_CURRENCIES } from "./Onboarding.js";
 import { navigate } from "./router.js";
 
 const label = (s: string) => s.replace(/[-_]/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+
+const SOURCE: Record<EventSummary["provider"], string> = {
+	ticketmaster: "Ticketmaster",
+	eventbrite: "Eventbrite",
+	url: "the event's page",
+	manual: "you",
+};
 
 export function Planner({ me }: { me: Me }) {
 	const [form, setForm] = useState<FormState>(() => emptyForm(me.home_currency ?? "CAD"));
@@ -16,6 +32,15 @@ export function Planner({ me }: { me: Me }) {
 	const [placeError, setPlaceError] = useState<string | null>(null);
 	const [errors, setErrors] = useState<Record<string, string>>({});
 	const [submitting, setSubmitting] = useState(false);
+	const [link, setLink] = useState("");
+	const [reading, setReading] = useState(false);
+	const [linkError, setLinkError] = useState<{
+		code: string;
+		message: string;
+		title: string | null;
+	} | null>(null);
+	const [picked, setPicked] = useState<EventSummary | null>(null);
+	const [browse, setBrowse] = useState<{ start: BrowseStart; key: number } | null>(null);
 	const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
 		setForm((f) => ({ ...f, [k]: v }));
 
@@ -40,12 +65,76 @@ export function Planner({ me }: { me: Me }) {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [form.origin_text]);
 
+	function pick(e: EventSummary) {
+		setPicked(e);
+		setLinkError(null);
+		setForm((f) => pinEvent(f, e));
+		document.getElementById("trip-details")?.scrollIntoView({ behavior: "smooth" });
+	}
+
+	async function readLink(url: string) {
+		setLinkError(null);
+		if (url.trim().length < 8) return;
+		setReading(true);
+		try {
+			const { event } = await api.lookupEvent(url.trim());
+			pick(event);
+			setLink("");
+		} catch (err) {
+			const title =
+				err instanceof ApiError &&
+				typeof err.details === "object" &&
+				err.details !== null &&
+				"title" in err.details &&
+				typeof err.details.title === "string"
+					? err.details.title
+					: null;
+			setLinkError({
+				code: err instanceof ApiError ? err.code : "error",
+				message: err instanceof ApiError ? err.message : "We couldn't read that link right now.",
+				title,
+			});
+		} finally {
+			setReading(false);
+		}
+	}
+
+	function openBrowse(start: Partial<BrowseStart> = {}) {
+		setBrowse((b) => ({
+			key: (b?.key ?? 0) + 1,
+			start: {
+				category: "sports",
+				near_text: form.origin?.label ?? form.origin_text,
+				near: form.origin,
+				date_from: form.date_from,
+				date_to: form.date_to,
+				...start,
+			},
+		}));
+	}
+
 	async function parse() {
 		setParsing(true);
 		setParseNote(null);
 		try {
 			const { parsed } = await api.parse(text);
 			setForm((f) => applyParsed(f, parsed, text));
+			if (parsed.event_query) setPicked(null);
+			if (parsed.event_url) {
+				setLink(parsed.event_url);
+				void readLink(parsed.event_url);
+			} else if (parsed.event_category && !parsed.event_query) {
+				const near = parsed.event_city ?? parsed.origin_text ?? "";
+				openBrowse({
+					category: parsed.event_category,
+					near_text: near,
+					near: null,
+					date_from: parsed.date_from ?? form.date_from,
+					date_to: parsed.date_to ?? parsed.date_from ?? form.date_to,
+				});
+				setParseNote("Pick an event from the list, then check the trip details below.");
+				return;
+			}
 			setParseNote("Check the details below, change anything that's wrong, then find packages.");
 		} catch (err) {
 			setParseNote(
@@ -95,7 +184,9 @@ export function Planner({ me }: { me: Me }) {
 				{parseNote && <p className="note">{parseNote}</p>}
 			</section>
 
-			<form className="card" onSubmit={submit} noValidate>
+			{browse && <Browse key={browse.key} start={browse.start} onPick={pick} />}
+
+			<form className="card" id="trip-details" onSubmit={submit} noValidate>
 				<h2>Trip details</h2>
 
 				<fieldset>
@@ -143,43 +234,173 @@ export function Planner({ me }: { me: Me }) {
 
 				<fieldset>
 					<legend>The event</legend>
-					<label>
-						Team, artist or event
-						<input
-							value={form.event_query}
-							onChange={(e) => set("event_query", e.target.value)}
-							placeholder="Knicks"
-						/>
-						{err("event_query")}
-					</label>
-					<label>
-						Event city (optional)
-						<input
-							value={form.event_city}
-							onChange={(e) => set("event_city", e.target.value)}
-							placeholder="New York"
-						/>
-					</label>
-					<div className="row">
-						<label>
-							From
-							<input
-								type="date"
-								value={form.date_from}
-								onChange={(e) => set("date_from", e.target.value)}
-							/>
-							{err("date_from")}
-						</label>
-						<label>
-							To
-							<input
-								type="date"
-								value={form.date_to}
-								onChange={(e) => set("date_to", e.target.value)}
-							/>
-							{err("date_to")}
-						</label>
-					</div>
+					{form.pinned && !form.manual ? (
+						<div className="picked">
+							<p className="confirmed">
+								✓ {picked?.name ?? form.event_query} — {form.date_from}
+								{picked?.venue_name && `, ${picked.venue_name}`}
+								{(picked?.city ?? form.event_city) && `, ${picked?.city ?? form.event_city}`}
+							</p>
+							<p className="muted">
+								From {SOURCE[picked?.provider ?? form.pinned.provider]}
+								{picked && priceText(picked) && ` · tickets ${priceText(picked)}`}
+								{picked?.url && (
+									<>
+										{" · "}
+										<a href={picked.url} target="_blank" rel="noopener noreferrer">
+											event page ↗
+										</a>
+									</>
+								)}
+							</p>
+							<button
+								type="button"
+								onClick={() => {
+									setPicked(null);
+									setForm(unpinEvent);
+								}}
+							>
+								Pick a different event
+							</button>
+						</div>
+					) : form.manual ? (
+						<>
+							<p className="note">
+								We'll plan around the city and date you give. Ticket prices will be an estimate, so
+								check the real price before you book.
+							</p>
+							<label>
+								Event name
+								<input
+									value={form.event_query}
+									maxLength={200}
+									onChange={(e) => set("event_query", e.target.value)}
+								/>
+								{err("event_query")}
+							</label>
+							<div className="row">
+								<label>
+									City
+									<input
+										value={form.event_city}
+										maxLength={100}
+										onChange={(e) => set("event_city", e.target.value)}
+										placeholder="Ottawa"
+									/>
+									{err("event_city")}
+								</label>
+								<label>
+									Date
+									<input
+										type="date"
+										value={form.date_from}
+										onChange={(e) => setForm((f) => ({ ...f, date_from: e.target.value }))}
+									/>
+									{err("date_from")}
+								</label>
+							</div>
+							<button type="button" className="link" onClick={() => setForm(unpinEvent)}>
+								Search for it instead
+							</button>
+						</>
+					) : (
+						<>
+							<label>
+								Team, artist or event
+								<input
+									value={form.event_query}
+									onChange={(e) => set("event_query", e.target.value)}
+									placeholder="Knicks"
+								/>
+								{err("event_query")}
+							</label>
+							<label>
+								Event city (optional)
+								<input
+									value={form.event_city}
+									onChange={(e) => set("event_city", e.target.value)}
+									placeholder="New York"
+								/>
+							</label>
+							<div className="row">
+								<label>
+									From
+									<input
+										type="date"
+										value={form.date_from}
+										onChange={(e) => set("date_from", e.target.value)}
+									/>
+									{err("date_from")}
+								</label>
+								<label>
+									To
+									<input
+										type="date"
+										value={form.date_to}
+										onChange={(e) => set("date_to", e.target.value)}
+									/>
+									{err("date_to")}
+								</label>
+							</div>
+							<label>
+								Or paste the event's link (Eventbrite, Ticketmaster, a venue or festival page)
+								<div className="row">
+									<input
+										type="url"
+										inputMode="url"
+										placeholder="https://www.eventbrite.com/e/…"
+										value={link}
+										maxLength={2000}
+										onChange={(e) => setLink(e.target.value)}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") {
+												e.preventDefault();
+												void readLink(link);
+											}
+										}}
+									/>
+									<button
+										type="button"
+										onClick={() => readLink(link)}
+										disabled={reading || link.trim().length < 8}
+									>
+										{reading ? "Reading…" : "Read link"}
+									</button>
+								</div>
+							</label>
+							{linkError && (
+								<div className="error">
+									<p>{linkError.message}</p>
+									{linkError.code === "unreadable" && (
+										<button
+											type="button"
+											onClick={() => {
+												setForm((f) => describeEvent(f, linkError.title));
+												setLinkError(null);
+											}}
+										>
+											Tell us the date and city
+										</button>
+									)}
+								</div>
+							)}
+							<p className="muted">
+								Not sure which event?{" "}
+								<button type="button" className="link" onClick={() => openBrowse()}>
+									Browse by kind of event
+								</button>{" "}
+								or{" "}
+								<button
+									type="button"
+									className="link"
+									onClick={() => setForm((f) => describeEvent(f, null))}
+								>
+									describe it yourself
+								</button>
+								.
+							</p>
+						</>
+					)}
 				</fieldset>
 
 				<fieldset>

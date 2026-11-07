@@ -8,6 +8,7 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import {
+	EVENT_CATEGORY_IDS,
 	type ParsedTripRequest,
 	ParsedTripRequestSchema,
 	SEAT_TIERS,
@@ -41,6 +42,8 @@ export const PARSE_JSON_SCHEMA = {
 		"seat_quality",
 		"vibe_tags",
 		"accessibility",
+		"event_url",
+		"event_category",
 	],
 	properties: {
 		origin_text: {
@@ -81,6 +84,15 @@ export const PARSE_JSON_SCHEMA = {
 		seat_quality: nullable({ type: "string", enum: [...SEAT_TIERS, "any"] }),
 		vibe_tags: { type: "array", items: { type: "string", enum: [...VIBE_TAGS] } },
 		accessibility: nullable(str),
+		event_url: {
+			...nullable(str),
+			description: "An event link (http or https) the traveller pasted, copied exactly.",
+		},
+		event_category: {
+			...nullable({ type: "string", enum: [...EVENT_CATEGORY_IDS] }),
+			description:
+				"Only when the traveller asks for a kind of event rather than one named event, e.g. 'gaming events near Toronto in May' -> gaming. Otherwise null.",
+		},
 	},
 } as const;
 
@@ -93,6 +105,8 @@ Rules:
 - Never invent a price or a cost. budget_amount is only the traveller's own budget figure, copied from their words.
 - Resolve relative dates ("in March", "next weekend") against today's date, which is given. A month with no year means its next occurrence.
 - "for two of us" means party_size 2. "$1,200 for two of us" is a total budget unless they say "each" or "per person".
+- event_url is copied character for character from the message; never build or guess one.
+- A request for a kind of event ("car shows", "a comedy night") sets event_category and leaves event_query null unless a specific event is also named.
 - vibe_tags only from the allowed list; map close synonyms (e.g. "bars" -> nightlife, "kids" -> family, "cheap as possible" -> budget-max).`;
 
 export type ParseOutcome =

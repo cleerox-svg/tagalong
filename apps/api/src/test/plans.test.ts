@@ -179,6 +179,8 @@ describe("POST /trip-requests/parse", () => {
 		seat_quality: null,
 		vibe_tags: ["food", "nightlife"],
 		accessibility: null,
+		event_url: null,
+		event_category: null,
 	};
 	const anthropic = (text: string, stop_reason = "end_turn") =>
 		mockFetch((url, init) => {
@@ -229,6 +231,21 @@ describe("POST /trip-requests/parse", () => {
 			u.cookie,
 		);
 		expect(res.status).toBe(422);
+	});
+
+	it("returns a browse category for a kind of event", async () => {
+		const u = await signedInUser();
+		anthropic(JSON.stringify({ ...parsed, event_query: null, event_category: "gaming" }));
+		const res = await postJson(
+			"/trip-requests/parse",
+			{ text: "gaming events near Toronto in May" },
+			u.cookie,
+		);
+		expect(res.status).toBe(200);
+		expect((await res.json<any>()).parsed).toMatchObject({
+			event_query: null,
+			event_category: "gaming",
+		});
 	});
 
 	it("handles a refusal without reading content", async () => {
