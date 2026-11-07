@@ -1,6 +1,13 @@
 import type { ParsedTripRequest } from "@tagalong/shared";
 import { describe, expect, it } from "vitest";
-import { applyParsed, emptyForm, toTripRequest } from "./form.js";
+import {
+	applyParsed,
+	describeEvent,
+	emptyForm,
+	pinEvent,
+	toTripRequest,
+	unpinEvent,
+} from "./form.js";
 
 const toronto = { label: "Toronto, ON, Canada", lat: 43.65, lng: -79.38, country_code: "CA" };
 
@@ -20,6 +27,8 @@ const nothing: ParsedTripRequest = {
 	seat_quality: null,
 	vibe_tags: [],
 	accessibility: null,
+	event_url: null,
+	event_category: null,
 };
 
 describe("confirm form", () => {
@@ -59,6 +68,7 @@ describe("confirm form", () => {
 		const next = applyParsed(
 			f,
 			{
+				...nothing,
 				origin_text: "Toronto",
 				event_query: "Knicks",
 				event_city: null,
@@ -88,5 +98,56 @@ describe("confirm form", () => {
 		const next = applyParsed(f, { ...nothing, origin_text: "London" }, "raw");
 		expect(next.origin).toBeNull();
 		expect(next.origin_text).toBe("London");
+	});
+});
+
+describe("picked and described events", () => {
+	const ready = {
+		...emptyForm("CAD"),
+		origin: toronto,
+		party_size: "2",
+		budget_amount: "900",
+		date_from: "2027-05-01",
+		date_to: "2027-05-31",
+	};
+	const show = {
+		pinned: { provider: "eventbrite" as const, id: "812345678901" },
+		name: "Ottawa Gaming Expo",
+		city: "Ottawa",
+		local_date: "2027-05-15",
+	};
+
+	it("pins a picked event and plans exactly its date", () => {
+		const r = toTripRequest(pinEvent(ready, show));
+		expect(r.ok && r.request.event).toEqual({
+			query: "Ottawa Gaming Expo",
+			city: "Ottawa",
+			pinned: { provider: "eventbrite", id: "812345678901" },
+		});
+		expect(r.ok && [r.request.date_from, r.request.date_to]).toEqual(["2027-05-15", "2027-05-15"]);
+	});
+
+	it("unpinning keeps the fields but searches again", () => {
+		const r = toTripRequest(unpinEvent(pinEvent(ready, show)));
+		expect(r.ok && r.request.event.pinned).toBeUndefined();
+	});
+
+	it("a described event needs a city and plans one date", () => {
+		const f = describeEvent({ ...ready, event_city: "" }, "Fall Car Meet");
+		const missing = toTripRequest(f);
+		expect(!missing.ok && missing.errors.event_city).toBeTruthy();
+		const r = toTripRequest({ ...f, event_city: "Ottawa", date_from: "2027-05-08" });
+		expect(r.ok && r.request.event).toEqual({
+			query: "Fall Car Meet",
+			city: "Ottawa",
+			manual: true,
+		});
+		expect(r.ok && [r.request.date_from, r.request.date_to]).toEqual(["2027-05-08", "2027-05-08"]);
+	});
+
+	it("a new event from the parse step drops the old pin", () => {
+		const next = applyParsed(pinEvent(ready, show), { ...nothing, event_query: "Raptors" }, "x");
+		expect(next.pinned).toBeUndefined();
+		expect(next.event_query).toBe("Raptors");
 	});
 });

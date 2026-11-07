@@ -25,6 +25,7 @@ export default defineConfig({
 						ANTHROPIC_API_KEY: "test-anthropic-key",
 						TICKETMASTER_API_KEY: "test-tm-key",
 						GOOGLE_MAPS_API_KEY: "test-maps-key",
+						EVENTBRITE_TOKEN: "test-eventbrite-token",
 					},
 				},
 			};

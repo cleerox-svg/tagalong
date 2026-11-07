@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EVENT_CATEGORY_IDS } from "./categories.js";
 import { CURRENCY_RE } from "./money.js";
 
 export const TRANSPORT_MODES = ["drive", "fly", "train", "bus"] as const;
@@ -38,6 +39,33 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD");
 const currency = z.string().regex(CURRENCY_RE, "ISO 4217 code");
 const countryCode = z.string().regex(/^[A-Z]{2}$/, "ISO 3166-1 alpha-2");
 
+/** Where an event's details came from. "manual": the user typed the date and city. */
+export const EVENT_PROVIDERS = ["ticketmaster", "eventbrite", "url", "manual"] as const;
+export type EventProvider = (typeof EVENT_PROVIDERS)[number];
+
+/** A pasted event link. http(s) only; the server checks the host before fetching it. */
+export const EventUrlSchema = z
+	.string()
+	.trim()
+	.max(2000)
+	.url()
+	.refine((u) => /^https?:\/\//i.test(u), "An http or https link");
+
+/**
+ * One event the user chose (from a pasted link, a category browse or "plan
+ * this date instead"), so the run plans that event rather than searching.
+ */
+export const PinnedEventSchema = z.discriminatedUnion("provider", [
+	z.object({
+		provider: z.literal("ticketmaster"),
+		id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+	}),
+	z.object({ provider: z.literal("eventbrite"), id: z.string().regex(/^\d{6,20}$/) }),
+	/** A page we read schema.org Event data from; it is read again on every run. */
+	z.object({ provider: z.literal("url"), url: EventUrlSchema }),
+]);
+export type PinnedEvent = z.infer<typeof PinnedEventSchema>;
+
 /** A resolved place. Origins are city-level; nothing finer is stored. */
 export const PlaceSchema = z.object({
 	label: z.string().min(1).max(200),
@@ -69,11 +97,20 @@ export const TripRequestSchema = z
 		event: z.object({
 			query: z.string().min(1).max(200),
 			city: z.string().max(100).optional(),
-			/** Pin one Ticketmaster event (e.g. "plan this date instead"). */
+			/**
+			 * Pin one Ticketmaster event. Kept for clients from before `pinned`;
+			 * `pinnedEvent()` reads either.
+			 */
 			ticketmaster_event_id: z
 				.string()
 				.regex(/^[A-Za-z0-9_-]{1,64}$/)
 				.optional(),
+			pinned: PinnedEventSchema.optional(),
+			/**
+			 * No provider has this event (e.g. a Facebook event): plan from the
+			 * name in `query`, `city` and the single date the user gave.
+			 */
+			manual: z.boolean().optional(),
 		}),
 		date_from: isoDate,
 		date_to: isoDate,
@@ -88,8 +125,24 @@ export const TripRequestSchema = z
 	.refine((r) => r.date_from <= r.date_to, {
 		message: "date_from must not be after date_to",
 		path: ["date_to"],
+	})
+	.refine((r) => !(r.event.manual && (r.event.pinned || r.event.ticketmaster_event_id)), {
+		message: "An event is either picked or described, not both",
+		path: ["event", "manual"],
+	})
+	.refine((r) => !r.event.manual || (!!r.event.city && r.date_from === r.date_to), {
+		message: "A described event needs its city and one date",
+		path: ["event", "city"],
 	});
 export type TripRequest = z.infer<typeof TripRequestSchema>;
+
+/** The event a request is pinned to, from `pinned` or the older `ticketmaster_event_id`. */
+export function pinnedEvent(r: Pick<TripRequest, "event">): PinnedEvent | null {
+	if (r.event.pinned) return r.event.pinned;
+	if (r.event.ticketmaster_event_id)
+		return { provider: "ticketmaster", id: r.event.ticketmaster_event_id };
+	return null;
+}
 
 /**
  * What the free-text parse step may return. Everything is nullable: the user
@@ -115,12 +168,16 @@ export const ParsedTripRequestSchema = z.object({
 	seat_quality: z.enum([...SEAT_TIERS, "any"]).nullable(),
 	vibe_tags: z.array(z.enum(VIBE_TAGS)),
 	accessibility: z.string().max(500).nullable(),
+	/** A link the traveller pasted into their message, copied as written. */
+	event_url: z.string().max(2000).nullable().default(null),
+	/** "Gaming events near X": a browse category instead of one named event. */
+	event_category: z.enum(EVENT_CATEGORY_IDS).nullable().default(null),
 });
 export type ParsedTripRequest = z.infer<typeof ParsedTripRequestSchema>;
 
 /** Our own event shape; provider adapters map into it. */
 export interface EventInfo {
-	provider: "ticketmaster";
+	provider: EventProvider;
 	provider_event_id: string;
 	name: string;
 	category: string | null;
@@ -133,7 +190,10 @@ export interface EventInfo {
 	local_date: string;
 	starts_at: string | null;
 	url: string | null;
-	/** Face-value range from the provider, if it lists one. */
+	/**
+	 * Face-value range from the provider, if it lists one. min 0 and max 0
+	 * means the provider lists the event as free.
+	 */
 	price_range: { min_minor: number; max_minor: number; currency: string } | null;
 }
 

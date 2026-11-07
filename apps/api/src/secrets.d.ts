@@ -18,6 +18,11 @@ interface WorkerSecrets {
 	DUFFEL_ACCESS_TOKEN?: string;
 	BOOKING_API_TOKEN?: string;
 	BOOKING_AFFILIATE_ID?: string;
+	/**
+	 * Phase 4 Eventbrite links. Optional: without it an Eventbrite link is read
+	 * like any other event page (its schema.org data).
+	 */
+	EVENTBRITE_TOKEN?: string;
 	/** Phase 3 price-drop emails. Optional: without it alerts are shown in the app only. */
 	RESEND_API_KEY?: string;
 }

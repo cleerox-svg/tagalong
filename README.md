@@ -16,6 +16,13 @@ Phase 3 (saved trips) adds **Save trip** and **My trips**, read-only share
 links (`/s/<token>`, no sign-in needed, revocable), and scheduled price-drop
 checks that email through Resend when its key is set.
 
+Phase 4 (any event) plans from a pasted event link — Eventbrite (through its
+API when `EVENTBRITE_TOKEN` is set), Ticketmaster, or any page that publishes
+schema.org Event data — and from an event the user describes (name, city,
+date) when no source has it, e.g. a Facebook event. **Browse events** finds
+events by kind ("gaming", "car & import shows", …) near a city on chosen
+dates.
+
 ## Stack
 
 | Layer    | Choice                                |

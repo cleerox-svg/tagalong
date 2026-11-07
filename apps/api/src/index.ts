@@ -3,6 +3,7 @@ import { auth } from "./auth/routes.js";
 import { errorBody, HttpError, sendError, type AppEnv } from "./lib/http.js";
 import { corsMiddleware } from "./lib/security.js";
 import { health } from "./routes/health.js";
+import { events } from "./routes/events.js";
 import { plans } from "./routes/plans.js";
 import { trips } from "./routes/trips.js";
 import { checkSavedTrips } from "./planning/alerts.js";
@@ -17,6 +18,8 @@ app.route("/", health);
 app.route("/", auth);
 // Signed in: Budgetrip.
 app.route("/", plans);
+// Signed in: pasted event links and category browse.
+app.route("/", events);
 // Signed in: saved trips and sharing. GET /shared/:token is public.
 app.route("/", trips);
 

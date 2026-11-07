@@ -94,6 +94,59 @@ describe("buildCandidates", () => {
 		expect(ticket).toMatchObject({ amount_minor: 9000, currency: "USD", is_estimate: false });
 	});
 
+	it("prices an Eventbrite event from its listed range and names the source", () => {
+		const e = event({
+			provider: "eventbrite",
+			provider_event_id: "123456789012",
+			url: "https://www.eventbrite.com/e/123456789012",
+			price_range: { min_minor: 2500, max_minor: 2500, currency: "USD" },
+		});
+		const cs = build(req(), e);
+		expect(new Set(cs.map((c) => c.ticket_tier))).toEqual(new Set(["budget"]));
+		const t = cs[0]?.items.find((i) => i.provider === "eventbrite");
+		expect(t).toMatchObject({
+			amount_minor: 5000,
+			is_estimate: false,
+			provider_ref: "123456789012",
+		});
+		expect(t?.method).toMatch(/^Eventbrite listed face value/);
+	});
+
+	it("plans a free event with a zero ticket line and no fee estimate", () => {
+		const cs = build(
+			req(),
+			event({ price_range: { min_minor: 0, max_minor: 0, currency: "USD" } }),
+		);
+		expect(cs.length).toBeGreaterThan(0);
+		for (const c of cs) {
+			const tickets = c.items.filter((i) => i.kind === "ticket");
+			expect(tickets).toHaveLength(1);
+			expect(tickets[0]).toMatchObject({ amount_minor: 0, is_estimate: false });
+			expect(tickets[0]?.method).toMatch(/free/);
+		}
+	});
+
+	it("keeps a free tier at zero next to paid tiers, with fees only on the paid ones", () => {
+		const cs = build(
+			req(),
+			event({ price_range: { min_minor: 0, max_minor: 8000, currency: "USD" } }),
+		);
+		const budget = cs.find((c) => c.ticket_tier === "budget");
+		const premium = cs.find((c) => c.ticket_tier === "premium");
+		expect(budget?.items.filter((i) => i.kind === "ticket")).toHaveLength(1);
+		expect(premium?.items.filter((i) => i.kind === "ticket")).toHaveLength(2);
+	});
+
+	it("says a described (manual) event has no ticket seller and estimates the tickets", () => {
+		const cs = build(
+			req(),
+			event({ provider: "manual", provider_event_id: "m1", url: null, price_range: null }),
+		);
+		const t = cs[0]?.items.find((i) => i.kind === "ticket");
+		expect(t).toMatchObject({ provider: "estimate", is_estimate: true });
+		expect(t?.method).toMatch(/no ticket seller/);
+	});
+
 	it("falls back to labelled estimates when no price is listed", () => {
 		const cs = build(req(), event({ price_range: null }));
 		const t = cs[0]?.items.find((i) => i.kind === "ticket");

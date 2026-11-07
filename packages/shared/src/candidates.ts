@@ -108,12 +108,33 @@ function estimate(
 
 const enc = encodeURIComponent;
 
+/** Who listed the event, for "how we got this" text. */
+export function eventSourceName(event: Pick<EventInfo, "provider" | "url">): string {
+	switch (event.provider) {
+		case "ticketmaster":
+			return "Ticketmaster";
+		case "eventbrite":
+			return "Eventbrite";
+		case "manual":
+			return "No ticket seller";
+		case "url": {
+			try {
+				return event.url ? `The event page (${new URL(event.url).hostname})` : "The event page";
+			} catch {
+				return "The event page";
+			}
+		}
+	}
+}
+
 function ticketItems(input: BuildInput): Map<SeatTier, CandidateItem[]> {
 	const { event, request } = input;
 	const party = request.party_size;
 	const out = new Map<SeatTier, CandidateItem[]>();
 	const pr = event.price_range;
 	const url = event.url;
+	const source = eventSourceName(event);
+	const tickets = `ticket${party > 1 ? "s" : ""}`;
 
 	const feeItem = (faceTotal: { amount_minor: number; currency: string }): CandidateItem => ({
 		kind: "ticket",
@@ -128,7 +149,26 @@ function ticketItems(input: BuildInput): Map<SeatTier, CandidateItem[]> {
 		method: `${EST.ticketFeeRate * 100}% of face value (${formatMoney(faceTotal)}); the seller shows the real fees at checkout`,
 	});
 
-	if (pr && pr.max_minor >= pr.min_minor && pr.min_minor > 0) {
+	// Listed as free: one zero-cost line, no fees, not an estimate.
+	if (pr && pr.max_minor === 0 && pr.min_minor === 0) {
+		out.set("budget", [
+			{
+				kind: "ticket",
+				title: `${party} × free ${tickets} — ${event.name}`,
+				provider: event.provider,
+				provider_ref: event.provider_event_id,
+				amount_minor: 0,
+				currency: pr.currency,
+				is_estimate: false,
+				booking_url: url,
+				fetched_at: input.fetched_at,
+				method: `${source} lists this event as free. Registration may still be needed`,
+			},
+		]);
+		return out;
+	}
+
+	if (pr && pr.max_minor > 0 && pr.max_minor >= pr.min_minor && pr.min_minor >= 0) {
 		const tiers: Array<[SeatTier, number, boolean]> = [["budget", pr.min_minor, false]];
 		if (pr.max_minor > pr.min_minor) {
 			tiers.push(["mid", Math.ceil((pr.min_minor + pr.max_minor) / 2), true]);
@@ -137,36 +177,38 @@ function ticketItems(input: BuildInput): Map<SeatTier, CandidateItem[]> {
 		for (const [tier, each, interpolated] of tiers) {
 			const face = { amount_minor: each * party, currency: pr.currency };
 			const eachStr = formatMoney({ amount_minor: each, currency: pr.currency });
-			out.set(tier, [
-				{
-					kind: "ticket",
-					title: `${party} × ${tier} ticket${party > 1 ? "s" : ""} — ${event.name}`,
-					provider: "ticketmaster",
-					provider_ref: event.provider_event_id,
-					...face,
-					is_estimate: interpolated,
-					booking_url: url,
-					fetched_at: input.fetched_at,
-					method: interpolated
-						? `Midpoint of Ticketmaster's listed face-value range: ${eachStr} each × ${party}`
-						: `Ticketmaster listed face value: ${eachStr} each × ${party}`,
-				},
-				feeItem(face),
-			]);
+			const line: CandidateItem = {
+				kind: "ticket",
+				title: `${party} × ${tier} ${tickets} — ${event.name}`,
+				provider: event.provider,
+				provider_ref: event.provider_event_id,
+				...face,
+				is_estimate: interpolated,
+				booking_url: url,
+				fetched_at: input.fetched_at,
+				method: interpolated
+					? `Midpoint of ${source}'s listed face-value range: ${eachStr} each × ${party}`
+					: `${source} listed face value: ${eachStr} each × ${party}`,
+			};
+			out.set(tier, each > 0 ? [line, feeItem(face)] : [line]);
 		}
 		return out;
 	}
 
 	const base = ticketFallbackUsd(event.category);
+	const why =
+		event.provider === "manual"
+			? "We have no ticket seller for an event you described"
+			: `${source} lists no price for this event`;
 	for (const tier of ["budget", "mid", "premium"] as const) {
 		const each = base * TICKET_TIER_MULTIPLIER[tier];
 		const faceUsd = each * party;
 		out.set(tier, [
 			estimate(
 				"ticket",
-				`${party} × ${tier} ticket${party > 1 ? "s" : ""} — ${event.name} (no price listed)`,
+				`${party} × ${tier} ${tickets} — ${event.name} (no price listed)`,
 				faceUsd,
-				`Ticketmaster lists no price for this event. Typical ${event.category ?? "event"} face value ${fmtUsd(base)} × ${TICKET_TIER_MULTIPLIER[tier]} for ${tier} seats = ${fmtUsd(each)} each × ${party}`,
+				`${why}. Typical ${event.category ?? "event"} face value ${fmtUsd(base)} × ${TICKET_TIER_MULTIPLIER[tier]} for ${tier} seats = ${fmtUsd(each)} each × ${party}`,
 				url,
 			),
 			feeItem(usd(faceUsd)),

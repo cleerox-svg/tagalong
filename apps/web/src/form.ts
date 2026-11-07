@@ -6,6 +6,7 @@ import {
 	isCurrencyCode,
 	type ParsedTripRequest,
 	parseMajor,
+	type PinnedEvent,
 	type Place,
 	type Prefs,
 	type TripRequest,
@@ -31,7 +32,10 @@ export interface FormState {
 	seat_quality: Prefs["seat_quality"];
 	vibe_tags: VibeTag[];
 	accessibility: string;
-	pinned_event_id?: string;
+	/** An event picked from a link or a browse: the run plans exactly this one. */
+	pinned?: PinnedEvent | undefined;
+	/** No provider has the event: plan from its name, city and one date. */
+	manual: boolean;
 }
 
 export function emptyForm(currency: string): FormState {
@@ -53,6 +57,7 @@ export function emptyForm(currency: string): FormState {
 		seat_quality: "any",
 		vibe_tags: [],
 		accessibility: "",
+		manual: false,
 	};
 }
 
@@ -63,7 +68,12 @@ export function applyParsed(f: FormState, p: ParsedTripRequest, raw: string): Fo
 		next.origin_text = p.origin_text;
 		next.origin = null; // a new city must be looked up and confirmed
 	}
-	if (p.event_query) next.event_query = p.event_query;
+	if (p.event_query && p.event_query !== f.event_query) {
+		next.event_query = p.event_query;
+		// A different event: drop the one picked before.
+		next.pinned = undefined;
+		next.manual = false;
+	}
 	if (p.event_city) next.event_city = p.event_city;
 	if (p.date_from) next.date_from = p.date_from;
 	if (p.date_to) next.date_to = p.date_to;
@@ -81,16 +91,52 @@ export function applyParsed(f: FormState, p: ParsedTripRequest, raw: string): Fo
 	return next;
 }
 
+/** The picked event fills the event fields; the run plans exactly this one. */
+export function pinEvent(
+	f: FormState,
+	e: { pinned: PinnedEvent; name: string; city: string | null; local_date: string },
+): FormState {
+	return {
+		...f,
+		pinned: e.pinned,
+		manual: false,
+		event_query: e.name.slice(0, 200),
+		event_city: (e.city ?? "").slice(0, 100),
+		date_from: e.local_date,
+		date_to: e.local_date,
+	};
+}
+
+/** "Tell us the date and city": no provider has it, so the user describes it. */
+export function describeEvent(f: FormState, title: string | null): FormState {
+	return {
+		...f,
+		pinned: undefined,
+		manual: true,
+		event_query: (title ?? f.event_query).slice(0, 200),
+		date_to: f.date_from,
+	};
+}
+
+/** Back to searching by name and dates. */
+export function unpinEvent(f: FormState): FormState {
+	return { ...f, pinned: undefined, manual: false };
+}
+
 export type FormResult =
 	{ ok: true; request: TripRequest } | { ok: false; errors: Record<string, string> };
 
 export function toTripRequest(f: FormState): FormResult {
 	const errors: Record<string, string> = {};
 	if (!f.origin) errors.origin = "Pick your starting city from the list.";
-	if (!f.event_query.trim()) errors.event_query = "What do you want to see?";
-	if (!f.date_from) errors.date_from = "Pick a date.";
-	if (!f.date_to) errors.date_to = "Pick a date.";
-	if (f.date_from && f.date_to && f.date_from > f.date_to)
+	if (!f.event_query.trim())
+		errors.event_query = f.manual ? "What's the event called?" : "What do you want to see?";
+	if (!f.date_from) errors.date_from = f.manual ? "When is it?" : "Pick a date.";
+	if (f.manual && !f.event_city.trim()) errors.event_city = "Which city is it in?";
+	// A described event is one date: the run plans around exactly that day.
+	const dateTo = f.manual ? f.date_from : f.date_to;
+	if (!dateTo) errors.date_to = "Pick a date.";
+	if (f.date_from && dateTo && f.date_from > dateTo)
 		errors.date_to = "The end is before the start.";
 	const party = Number(f.party_size);
 	if (!Number.isInteger(party) || party < 1 || party > 20) errors.party_size = "1 to 20 people.";
@@ -115,10 +161,11 @@ export function toTripRequest(f: FormState): FormResult {
 		event: {
 			query: f.event_query.trim(),
 			...(f.event_city.trim() ? { city: f.event_city.trim() } : {}),
-			...(f.pinned_event_id ? { ticketmaster_event_id: f.pinned_event_id } : {}),
+			...(f.pinned && !f.manual ? { pinned: f.pinned } : {}),
+			...(f.manual ? { manual: true } : {}),
 		},
 		date_from: f.date_from,
-		date_to: f.date_to,
+		date_to: dateTo,
 		party_size: party,
 		budget: { amount_minor: amount, currency, scope: f.budget_scope },
 		prefs: {

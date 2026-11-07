@@ -7,10 +7,12 @@
  * once there are several slow live-price providers to call.
  */
 import {
+	addDays,
 	buildCandidates,
 	type Candidate,
 	type EventInfo,
 	type LivePrices,
+	type PinnedEvent,
 	ESTIMATES_AS_OF,
 	ESTIMATES_CURRENCY,
 	ESTIMATES_VERSION,
@@ -24,14 +26,9 @@ import {
 import { ProviderError } from "../lib/cache.js";
 import { newId, nowIso } from "../lib/http.js";
 import { searchCities } from "../providers/google-places.js";
-import { getEvent, searchEvents } from "../providers/ticketmaster.js";
+import { PlanFailure, resolveEvents } from "./events.js";
 import { loadFx } from "./fx.js";
 import { gatherLive, type LiveResult } from "./live.js";
-
-/** A user-facing failure. Its message is shown as-is. */
-class PlanFailure extends Error {}
-
-const MAX_ALTERNATE_EVENTS = 2;
 
 async function setProgress(
 	db: D1Database,
@@ -87,6 +84,8 @@ async function resolveVenue(env: Env, e: EventInfo): Promise<Venue | null> {
 	if (e.lat !== null && e.lng !== null && e.country_code && e.city) {
 		return { lat: e.lat, lng: e.lng, country_code: e.country_code, city: e.city };
 	}
+	// A page or a described event may give only a city (or only a venue name):
+	// geocode it to the city, which is all the estimates need.
 	const q = [e.venue_name, e.city].filter(Boolean).join(", ");
 	if (!q) return null;
 	const [hit] = await searchCities(env.GOOGLE_MAPS_API_KEY, q);
@@ -105,6 +104,16 @@ function summary(p: RankedPackage, e: EventInfo): string {
 	return `${e.name} on ${e.local_date}: ${c.ticket_tier} seats, ${c.transport_mode} (~${c.travel_hours} h each way), ${stay}. About ${total} all in.`;
 }
 
+/** The pinned event as stored on trip_requests (provider NULL: a phase 1-3 Ticketmaster pin). */
+function storedPin(row: Record<string, unknown>): PinnedEvent | undefined {
+	const provider = (row.event_pinned_provider as string | null) ?? "ticketmaster";
+	if (provider === "url" && typeof row.event_url === "string")
+		return { provider: "url", url: row.event_url };
+	if ((provider === "ticketmaster" || provider === "eventbrite") && row.event_pinned_id)
+		return { provider, id: String(row.event_pinned_id) };
+	return undefined;
+}
+
 export interface RunOptions {
 	/** Re-check: bypass cached provider responses so every price is fetched again. */
 	fresh?: boolean;
@@ -116,7 +125,7 @@ export async function runPlan(env: Env, planId: string, opts: RunOptions = {}): 
 		const plan = await db
 			.prepare(
 				`SELECT p.id, t.raw_text, t.origin_city, t.origin_lat, t.origin_lng, t.origin_country, t.event_query,
-				   t.event_city, t.event_pinned_id, t.date_from, t.date_to, t.party_size, t.budget_minor, t.budget_currency, t.budget_scope,
+				   t.event_city, t.event_pinned_id, t.event_pinned_provider, t.event_url, t.event_manual, t.date_from, t.date_to, t.party_size, t.budget_minor, t.budget_currency, t.budget_scope,
 				   t.prefs_json
 				 FROM plans p JOIN trip_requests t ON t.id = p.trip_request_id WHERE p.id = ?`,
 			)
@@ -133,7 +142,8 @@ export async function runPlan(env: Env, planId: string, opts: RunOptions = {}): 
 			event: {
 				query: plan.event_query,
 				city: plan.event_city ?? undefined,
-				ticketmaster_event_id: plan.event_pinned_id ?? undefined,
+				pinned: storedPin(plan),
+				manual: plan.event_manual === 1 ? true : undefined,
 			},
 			date_from: plan.date_from,
 			date_to: plan.date_to,
@@ -148,37 +158,9 @@ export async function runPlan(env: Env, planId: string, opts: RunOptions = {}): 
 
 		await setProgress(db, planId, "running", "Finding your event…");
 		const fetchedAt = nowIso();
-		const found = await searchEvents(
-			env.TICKETMASTER_API_KEY,
-			{
-				keyword: request.event.query,
-				city: request.event.city,
-				date_from: request.date_from,
-				date_to: request.date_to,
-			},
-			opts,
-		);
-		let primary: EventInfo | undefined;
-		if (request.event.ticketmaster_event_id) {
-			primary =
-				found.find((e) => e.provider_event_id === request.event.ticketmaster_event_id) ??
-				(await getEvent(env.TICKETMASTER_API_KEY, request.event.ticketmaster_event_id, opts)) ??
-				undefined;
-		} else {
-			primary = found[0];
-		}
-		if (!primary) {
-			throw new PlanFailure(
-				`Ticketmaster has no "${request.event.query}" event between ${request.date_from} and ${request.date_to}. Try other keywords or wider dates.`,
-			);
-		}
-		const alternates = found
-			.filter((e) => e.provider_event_id !== primary.provider_event_id && e.name === primary.name)
-			.slice(0, MAX_ALTERNATE_EVENTS);
-		const others = found
-			.filter((e) => e.provider_event_id !== primary.provider_event_id)
-			.slice(0, 8);
-
+		// A day of slack: an event tonight in Los Angeles is already "tomorrow" in UTC.
+		const today = addDays(fetchedAt.slice(0, 10), -1);
+		const { primary, alternates, others } = await resolveEvents(env, request, today, opts);
 		const events = [primary, ...alternates];
 		const ids = new Map<string, string>();
 		for (const e of [...events, ...others]) {
@@ -231,6 +213,14 @@ export async function runPlan(env: Env, planId: string, opts: RunOptions = {}): 
 		let liveStatus: LiveResult["status"] = { flights: "not_needed", hotels: "not_needed" };
 		for (const e of events) {
 			const venue = await resolveVenue(env, e);
+			if (!venue && e === primary) {
+				const where = [primary.venue_name, primary.city].filter(Boolean).join(", ");
+				throw new PlanFailure(
+					where
+						? `We couldn't find ${where} on the map. Tell us the event's city and date instead.`
+						: `We couldn't tell where ${primary.name} is. Tell us the event's city and date instead.`,
+				);
+			}
 			if (!venue) continue;
 			if (e !== primary) {
 				// Alternative dates keep estimates: live lookups are spent on the event asked for.

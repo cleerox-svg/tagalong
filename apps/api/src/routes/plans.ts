@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { TripRequestSchema } from "@tagalong/shared";
+import { pinnedEvent, TripRequestSchema } from "@tagalong/shared";
 import { z } from "zod";
 import { requireAdult, requireUser } from "../auth/session.js";
 import { ProviderError } from "../lib/cache.js";
@@ -7,6 +7,7 @@ import { HttpError, newId, readJson, type AppEnv } from "../lib/http.js";
 import { rateLimit } from "../lib/rate-limit.js";
 import { requireTrustedWrite } from "../lib/security.js";
 import { parseTripText } from "../providers/anthropic.js";
+import { BlockedUrlError, checkPublicUrl } from "../providers/event-page.js";
 import { searchCities } from "../providers/google-places.js";
 import { runPlan } from "../planning/run.js";
 import { loadPlan } from "../planning/view.js";
@@ -65,15 +66,24 @@ plans.post("/plans", ...signedIn, requireAdult, async (c) => {
 		);
 	const r = body.data;
 	await rateLimit(c.env.DB, `plan:${c.get("userId")}`, 20, 3600);
+	const pin = pinnedEvent(r);
+	if (pin?.provider === "url") {
+		try {
+			checkPublicUrl(pin.url);
+		} catch (err) {
+			if (err instanceof BlockedUrlError) throw new HttpError(400, "blocked", err.message);
+			throw err;
+		}
+	}
 
 	const tripId = newId();
 	const planId = newId();
 	await c.env.DB.batch([
 		c.env.DB.prepare(
 			`INSERT INTO trip_requests (id, user_id, raw_text, origin_city, origin_lat, origin_lng, origin_country,
-			   event_query, event_city, event_pinned_id, date_from, date_to, party_size, budget_minor, budget_currency,
-			   budget_scope, prefs_json)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			   event_query, event_city, event_pinned_id, event_pinned_provider, event_url, event_manual, date_from, date_to,
+			   party_size, budget_minor, budget_currency, budget_scope, prefs_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).bind(
 			tripId,
 			c.get("userId"),
@@ -84,7 +94,10 @@ plans.post("/plans", ...signedIn, requireAdult, async (c) => {
 			r.origin.country_code,
 			r.event.query,
 			r.event.city ?? null,
-			r.event.ticketmaster_event_id ?? null,
+			pin && pin.provider !== "url" ? pin.id : null,
+			pin?.provider ?? null,
+			pin?.provider === "url" ? pin.url : null,
+			r.event.manual ? 1 : 0,
 			r.date_from,
 			r.date_to,
 			r.party_size,
