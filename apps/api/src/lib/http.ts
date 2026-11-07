@@ -34,3 +34,13 @@ export async function readJson(c: Context): Promise<unknown> {
 
 export const nowIso = () => new Date().toISOString();
 export const newId = () => crypto.randomUUID();
+
+/**
+ * A 400 `invalid` for a failed zod parse. The message is the first custom
+ * refinement's own text (e.g. "No links or e-mail addresses in an interest"),
+ * else `fallback` (for the generic length / type rules). Issues go in details.
+ */
+export function invalidInput(issues: { code: string; message: string }[], fallback: string) {
+	const custom = issues.find((i) => i.code === "custom");
+	return new HttpError(400, "invalid", custom ? `${custom.message}.` : fallback, issues);
+}

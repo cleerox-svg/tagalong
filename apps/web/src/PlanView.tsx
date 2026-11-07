@@ -9,7 +9,8 @@ import {
 	type PlanPackage,
 	type SavedState,
 } from "./api.js";
-import { navigate } from "./router.js";
+import { linkTo, navigate } from "./router.js";
+import { WhoElse } from "./WhoElse.js";
 
 const LABELS: Record<PlanPackage["label"], string> = {
 	cheapest: "Cheapest",
@@ -305,13 +306,7 @@ export function PlanView(props: { id: string } | { token: string }) {
 			{shared && (
 				<p className="note banner">
 					A trip someone shared with you — read only.{" "}
-					<a
-						href="/"
-						onClick={(e) => {
-							e.preventDefault();
-							navigate("/");
-						}}
-					>
+					<a href="/" onClick={linkTo("/")}>
 						Plan your own
 					</a>
 				</p>
@@ -384,6 +379,8 @@ export function PlanView(props: { id: string } | { token: string }) {
 				<Package key={p.id} p={p} was={plan.previous?.packages.find((x) => x.label === p.label)} />
 			))}
 
+			{!shared && plan.event_id && <WhoElse eventId={plan.event_id} />}
+
 			{!shared && plan.status === "done" && plan.result && plan.result.other_events.length > 0 && (
 				<section className="card">
 					<h2>Not the right event?</h2>
@@ -412,13 +409,7 @@ export function PlanView(props: { id: string } | { token: string }) {
 			)}
 
 			<p>
-				<a
-					href="/"
-					onClick={(e) => {
-						e.preventDefault();
-						navigate("/");
-					}}
-				>
+				<a href="/" onClick={linkTo("/")}>
 					← Plan another trip
 				</a>
 			</p>

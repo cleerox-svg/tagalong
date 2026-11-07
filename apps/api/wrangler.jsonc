@@ -28,6 +28,10 @@
 		"BOOKING_API_BASE": "https://demandapi.booking.com/3.1",
 		// Sender for price-drop emails; the domain must be verified in Resend.
 		"ALERT_FROM_EMAIL": "Budgetrip <alerts@averrow.com>",
+		// Tagalong moderators: comma-separated user UUIDs (users.id). Not a
+		// secret. Empty means nobody can open the moderation queue (fails
+		// closed). See docs/SETUP.md.
+		"MODERATOR_USER_IDS": "",
 	},
 
 	// Scheduled price checks for saved trips (phase 3). Every 6 hours at :23.
@@ -43,4 +47,14 @@
 			"migrations_dir": "../../migrations",
 		},
 	],
+
+	// Tagalong chat fan-out (phase 5). One ChatRoom per group or DM; it only
+	// relays to open WebSockets. D1 is the only message store.
+	"durable_objects": {
+		"bindings": [{ "name": "CHAT_ROOM", "class_name": "ChatRoom" }],
+	},
+
+	// Durable Object class migrations, applied by `wrangler deploy`. Append-only
+	// like /migrations: never edit or remove a tag, add a new one.
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatRoom"] }],
 }

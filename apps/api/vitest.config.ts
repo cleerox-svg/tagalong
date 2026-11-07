@@ -26,6 +26,11 @@ export default defineConfig({
 						TICKETMASTER_API_KEY: "test-tm-key",
 						GOOGLE_MAPS_API_KEY: "test-maps-key",
 						EVENTBRITE_TOKEN: "test-eventbrite-token",
+						// Overrides the empty wrangler var so moderation can be
+						// tested. Exactly one moderator: a test that inserts a user
+						// with id "00000000-0000-4000-8000-00000000a0d1" gets the
+						// moderation queue; every other user gets 403.
+						MODERATOR_USER_IDS: "00000000-0000-4000-8000-00000000a0d1",
 					},
 				},
 			};

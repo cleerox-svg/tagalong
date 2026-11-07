@@ -1,5 +1,17 @@
 import type {
+	BlockedUser,
+	ChatMessage,
+	Connection,
 	EventCategoryId,
+	GroupDetail,
+	GroupSummary,
+	ModAction,
+	ModReport,
+	ReportableTargetType,
+	ReportReason,
+	RoomKind,
+	TagalongProfile,
+	TagalongStatus,
 	EventProvider,
 	ParsedTripRequest,
 	PinnedEvent,
@@ -44,6 +56,9 @@ export interface Me {
 	home_city: string | null;
 	home_currency: string | null;
 	birthdate_verified_18: boolean;
+	/** Phase 5. Only the chosen name and city label are ever shown to others. */
+	tagalong: TagalongStatus;
+	is_moderator: boolean;
 }
 
 export interface PlanItem {
@@ -102,6 +117,8 @@ export interface Plan {
 	budget_currency: string;
 	budget_scope: "total" | "per_person";
 	prefs: TripRequest["prefs"];
+	/** The resolved event (owner view); keys the Tagalong group. */
+	event_id?: string | null;
 	event_name: string | null;
 	venue_name: string | null;
 	event_city: string | null;
@@ -217,6 +234,7 @@ export const api = {
 				local_date: string | null;
 			}>;
 		}>("/plans"),
+	...tagalongApi(),
 	signInUrl: () =>
 		`${API_BASE}/auth/google/start?return_to=${encodeURIComponent(window.location.href)}`,
 };
@@ -252,6 +270,10 @@ export interface SavedTrip {
 	event_query: string;
 	origin_city: string;
 	party_size: number;
+	/** Set when the API returns it; keys the Tagalong "Who else is going?" group. */
+	event_id?: string | null;
+	/** The event's Tagalong group, sent with the row so the list needs no per-trip fetch. */
+	group?: GroupSummary | null;
 	event_name: string | null;
 	local_date: string | null;
 	venue_name: string | null;
@@ -270,4 +292,72 @@ export interface TripsResponse {
 		created_at: string;
 		emailed_at: string | null;
 	}>;
+}
+
+const post = <T>(path: string, body: unknown = {}) =>
+	request<T>(path, { method: "POST", body: JSON.stringify(body) });
+const enc = encodeURIComponent;
+
+/** Where a chat's message list lives: a group's room or a DM connection's. */
+export function roomPath(kind: RoomKind, id: string): string {
+	return kind === "group" ? `/groups/${enc(id)}` : `/dms/${enc(id)}`;
+}
+
+/** GET …/messages. Cursors are a message's `seq` (`messageCursor` in shared). */
+export interface MessagePage {
+	/** Oldest first. */
+	messages: ChatMessage[];
+	/** More exist beyond this page in the direction asked. */
+	has_more?: boolean;
+	before?: string | null;
+	after?: string | null;
+}
+
+/** Tagalong (phase 5). Every write is a JSON POST (CSRF rule). */
+function tagalongApi() {
+	return {
+		tagalongOptIn: (body: { confirm: true; name: string; city: string }) =>
+			post<{ tagalong: TagalongStatus }>("/tagalong/opt-in", body),
+		tagalongOptOut: () => post<{ tagalong: TagalongStatus }>("/tagalong/opt-out"),
+		safetyAck: () => post<{ tagalong: TagalongStatus }>("/tagalong/safety-ack"),
+		eventGroup: (eventId: string) => request<GroupSummary>(`/events/${enc(eventId)}/group`),
+		joinGroup: (eventId: string, interest: string | null) =>
+			post<GroupSummary>(`/events/${enc(eventId)}/group/join`, { interest }),
+		group: (id: string) => request<GroupDetail>(`/groups/${enc(id)}`),
+		leaveGroup: (id: string) => post<{ left: true }>(`/groups/${enc(id)}/leave`),
+		setInterest: (id: string, interest: string | null) =>
+			post<{ interest: string | null }>(`/groups/${enc(id)}/interest`, { interest }),
+		messages: (kind: RoomKind, id: string, q: { after?: string; before?: string } = {}) => {
+			const qs = new URLSearchParams(
+				Object.entries(q).filter((e): e is [string, string] => typeof e[1] === "string"),
+			).toString();
+			return request<MessagePage>(`${roomPath(kind, id)}/messages${qs ? `?${qs}` : ""}`);
+		},
+		sendMessage: (kind: RoomKind, id: string, body: string) =>
+			post<{ message: ChatMessage }>(`${roomPath(kind, id)}/messages`, { body }),
+		deleteMessage: (id: string) => post<{ deleted: true }>(`/messages/${enc(id)}/delete`),
+		profile: (userId: string) => request<TagalongProfile>(`/tagalong/users/${enc(userId)}`),
+		connections: () => request<{ connections: Connection[] }>("/connections"),
+		connect: (userId: string) =>
+			post<{ connection: Connection }>("/connections", { user_id: userId }),
+		acceptConnection: (id: string) =>
+			post<{ connection: Connection }>(`/connections/${enc(id)}/accept`),
+		declineConnection: (id: string) =>
+			post<{ connection: Connection }>(`/connections/${enc(id)}/decline`),
+		closeConnection: (id: string) =>
+			post<{ connection: Connection }>(`/connections/${enc(id)}/close`),
+		blocks: () => request<{ blocks: BlockedUser[] }>("/blocks"),
+		block: (userId: string) => post<{ blocked: true }>("/blocks", { user_id: userId }),
+		unblock: (userId: string) => post<{ blocked: false }>(`/blocks/${enc(userId)}/remove`),
+		report: (body: {
+			target_type: ReportableTargetType;
+			target_id: string;
+			reason: ReportReason;
+			details?: string;
+		}) => post<{ reported: true }>("/reports", body),
+		modReports: () => request<{ reports: ModReport[] }>("/mod/reports?status=open"),
+		modResolve: (reportId: string, action: ModAction) =>
+			post<{ report: ModReport }>(`/mod/reports/${enc(reportId)}/resolve`, { action }),
+		modTrust: (userId: string) => post<{ trusted: true }>(`/mod/users/${enc(userId)}/trust`),
+	};
 }
