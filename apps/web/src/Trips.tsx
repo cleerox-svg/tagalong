@@ -2,6 +2,7 @@ import { formatMoney } from "@tagalong/shared";
 import { useEffect, useState } from "react";
 import { api, type TripsResponse } from "./api.js";
 import { navigate } from "./router.js";
+import { WhoElse } from "./WhoElse.js";
 
 const money = (amount_minor: number, currency: string) => formatMoney({ amount_minor, currency });
 const when = (iso: string) =>
@@ -53,6 +54,7 @@ export function Trips() {
 										: "Nothing has fit the budget yet"}
 									{t.last_checked_at && ` · checked ${when(t.last_checked_at)}`}
 								</div>
+								{t.event_id && <WhoElse eventId={t.event_id} compact />}
 							</div>
 							<label className="check">
 								<input

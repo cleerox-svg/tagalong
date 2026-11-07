@@ -10,6 +10,7 @@ import {
 	type SavedState,
 } from "./api.js";
 import { navigate } from "./router.js";
+import { WhoElse } from "./WhoElse.js";
 
 const LABELS: Record<PlanPackage["label"], string> = {
 	cheapest: "Cheapest",
@@ -383,6 +384,8 @@ export function PlanView(props: { id: string } | { token: string }) {
 			{plan.packages.map((p) => (
 				<Package key={p.id} p={p} was={plan.previous?.packages.find((x) => x.label === p.label)} />
 			))}
+
+			{!shared && plan.event_id && <WhoElse eventId={plan.event_id} />}
 
 			{!shared && plan.status === "done" && plan.result && plan.result.other_events.length > 0 && (
 				<section className="card">
