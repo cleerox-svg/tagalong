@@ -126,7 +126,8 @@ button,
 	text-decoration: none;
 	display: inline-block;
 }
-button:disabled {
+button:disabled,
+button[aria-disabled="true"] {
 	opacity: 0.6;
 	cursor: default;
 }
@@ -376,7 +377,7 @@ a {
 	padding: 0;
 	margin: 0;
 }
-.trips li {
+.trips > li {
 	display: flex;
 	justify-content: space-between;
 	align-items: flex-start;
@@ -385,7 +386,7 @@ a {
 	padding: 12px 0;
 	border-top: 1px solid var(--line);
 }
-.trips .check {
+.trips > li > .check {
 	margin: 0;
 	flex: none;
 }
@@ -441,8 +442,13 @@ a {
 	padding-left: 20px;
 	margin: 0 0 16px;
 }
-.tg-points li {
+/* A plain bulleted list, even inside a flex row (the opt-in gate in My trips). */
+.tg-points > li {
+	display: list-item;
 	margin: 4px 0;
+	padding: 0;
+	border: 0;
+	overflow-wrap: anywhere;
 }
 .tg-actions {
 	display: flex;
@@ -505,7 +511,7 @@ a {
 	padding: 0;
 	margin: 0;
 }
-.tg-members li {
+.tg-members > li {
 	display: flex;
 	flex-wrap: wrap;
 	justify-content: space-between;
@@ -514,12 +520,35 @@ a {
 	padding: 12px 0;
 	border-top: 1px solid var(--line);
 }
-.tg-members li > div:first-child {
+.tg-members > li > div:first-child {
 	flex: 1 1 200px;
 	min-width: 0;
 }
-.tg-list li {
+.tg-list > li {
 	padding: 6px 0;
+}
+/* Thumb-sized in-app links. */
+.tg-members a,
+.tg-msg-name a,
+.tg-back {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+}
+.tg-whoelse .tg-gate {
+	margin-top: 12px;
+}
+/* Visually hidden, still read by screen readers. */
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+	border: 0;
 }
 
 /* Chat */

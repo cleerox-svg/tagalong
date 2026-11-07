@@ -7,7 +7,7 @@ import { Moderation } from "./Moderation.js";
 import { Onboarding } from "./Onboarding.js";
 import { Planner } from "./Planner.js";
 import { PlanView } from "./PlanView.js";
-import { navigate, usePath } from "./router.js";
+import { linkTo, usePath } from "./router.js";
 import { MeContext, RequireTagalong } from "./TagalongGate.js";
 import { Trips } from "./Trips.js";
 
@@ -53,10 +53,6 @@ export function App() {
 	const groupMatch = groupRe.exec(path);
 	const dmMatch = dmRe.exec(path);
 	const personMatch = personRe.exec(path);
-	const go = (to: string) => (e: React.MouseEvent) => {
-		e.preventDefault();
-		navigate(to);
-	};
 
 	const tagalongPage = (() => {
 		if (path === "/connections")
@@ -91,14 +87,7 @@ export function App() {
 		<MeContext.Provider value={meCtx}>
 			<div className="shell">
 				<header className="top">
-					<a
-						className="brand"
-						href="/"
-						onClick={(e) => {
-							e.preventDefault();
-							navigate("/");
-						}}
-					>
+					<a className="brand" href="/" onClick={linkTo("/")}>
 						Budgetrip
 					</a>
 					{session.state === "in" && (
@@ -106,14 +95,14 @@ export function App() {
 							<nav aria-label="Main" className="nav">
 								<a
 									href="/trips"
-									onClick={go("/trips")}
+									onClick={linkTo("/trips")}
 									aria-current={path === "/trips" ? "page" : undefined}
 								>
 									My trips
 								</a>
 								<a
 									href="/connections"
-									onClick={go("/connections")}
+									onClick={linkTo("/connections")}
 									aria-current={path === "/connections" ? "page" : undefined}
 								>
 									Tagalong
@@ -121,7 +110,7 @@ export function App() {
 								{session.me.is_moderator && (
 									<a
 										href="/mod"
-										onClick={go("/mod")}
+										onClick={linkTo("/mod")}
 										aria-current={path === "/mod" ? "page" : undefined}
 									>
 										Moderation

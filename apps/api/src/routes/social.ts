@@ -12,34 +12,37 @@ import {
 	ReportInputSchema,
 	type Connection,
 } from "@tagalong/shared";
-import { requireAdult, requireUser } from "../auth/session.js";
-import { kick } from "../chat/notify.js";
+import { deferOf, kick } from "../chat/notify.js";
 import { HttpError, newId, nowIso, readJson } from "../lib/http.js";
-import { requireTrustedWrite } from "../lib/security.js";
 import {
+	adult,
 	isActiveTagalongUser,
 	isBlockedEitherWay,
 	loadConnection,
+	member,
 	NOT_BLOCKED,
 	otherParty,
+	pairOf,
 	requireDm,
-	requireTagalong,
 	shareAGroup,
 	type ConnectionRow,
 	type TgEnv,
 } from "../tagalong/access.js";
 import { blockUser, listBlocks, unblockUser } from "../tagalong/blocks.js";
-import { limitBlock, limitConnect, limitReport } from "../tagalong/limits.js";
+import {
+	LIST_MAX,
+	limitBlock,
+	limitConnect,
+	limitMessageRead,
+	limitReport,
+} from "../tagalong/limits.js";
 import { listMessages, sendMessage } from "../tagalong/messages.js";
 import { createReport } from "../tagalong/reports.js";
 
 export const social = new Hono<TgEnv>();
 
-const adult = [requireTrustedWrite, requireUser, requireAdult] as const;
-const member = [...adult, requireTagalong] as const;
-
 const CONNECTION_COLUMNS =
-	"c.id, c.user_lo, c.user_hi, c.requested_by, c.status, c.created_at, c.responded_at";
+	"c.id, c.user_lo, c.user_hi, c.requested_by, c.status, c.created_at, c.responded_at, c.closed_by";
 
 type ConnectionWithOther = ConnectionRow & { other_name: string | null; other_city: string | null };
 
@@ -77,7 +80,7 @@ const safetyAckRequired = () =>
 		"Read the safety note about meeting in public places first.",
 	);
 
-/** All my connections (every status), hiding anyone in a block relation with me. */
+/** My connections (every status, newest activity first, capped), hiding block relations. */
 social.get("/connections", ...member, async (c) => {
 	const me = c.get("userId");
 	const { results } = await c.env.DB.prepare(
@@ -85,17 +88,23 @@ social.get("/connections", ...member, async (c) => {
 		 FROM connections c
 		 JOIN users u ON u.id = CASE WHEN c.user_lo = ? THEN c.user_hi ELSE c.user_lo END
 		 WHERE (c.user_lo = ? OR c.user_hi = ?) AND ${NOT_BLOCKED("u.id")}
-		 ORDER BY COALESCE(c.responded_at, c.created_at) DESC`,
+		 ORDER BY COALESCE(c.responded_at, c.created_at) DESC LIMIT ?`,
 	)
-		.bind(me, me, me, me, me)
+		.bind(me, me, me, me, me, LIST_MAX)
 		.all<ConnectionWithOther>();
 	return c.json({ connections: results.map((r) => toConnection(r, me)) });
 });
 
 /**
- * Ask to connect. If they had already asked me, this accepts. Asking again
- * after a close starts a new request; asking again after they declined does
- * nothing (no re-sending a declined request).
+ * Ask to connect. If they had already asked me, this accepts. A request
+ * someone declined, or a connection someone else closed, can't be re-sent by
+ * the other person (the row comes back unchanged); the person who declined
+ * or closed it may ask again, which starts a new request. Rows closed before
+ * closed_by existed (NULL) can be reopened by either side.
+ *
+ * The INSERT's SELECT is guarded by NOT EXISTS (block either way), so a block
+ * that lands after the checks above stops both the insert and the
+ * ON CONFLICT update: no row comes back, and the answer is a 404.
  */
 social.post("/connections", ...member, async (c) => {
 	const u = c.get("tg");
@@ -111,27 +120,31 @@ social.post("/connections", ...member, async (c) => {
 	if (!(await isActiveTagalongUser(db, target))) throw notFound;
 	await limitConnect(db, u);
 
-	const [lo, hi] = u.id < target ? [u.id, target] : [target, u.id];
+	const [lo, hi] = pairOf(u.id, target);
 	const theyAsked =
 		"(connections.status = 'pending' AND connections.requested_by <> excluded.requested_by)";
-	const reopen =
-		"(connections.status = 'closed' OR (connections.status = 'declined' AND connections.requested_by <> excluded.requested_by))";
+	const reopen = `((connections.status = 'closed'
+		  AND (connections.closed_by IS NULL OR connections.closed_by = excluded.requested_by))
+		OR (connections.status = 'declined' AND connections.requested_by <> excluded.requested_by))`;
 	const row = await db
 		.prepare(
 			`INSERT INTO connections (id, user_lo, user_hi, requested_by, status, created_at)
-			 VALUES (?, ?, ?, ?, 'pending', ?)
+			 SELECT ?, ?, ?, ?, 'pending', ?
+			 WHERE NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = ? AND b.blocked_id = ?)
+			   OR (b.blocker_id = ? AND b.blocked_id = ?))
 			 ON CONFLICT (user_lo, user_hi) DO UPDATE SET
 			   status = CASE WHEN ${theyAsked} THEN 'accepted' WHEN ${reopen} THEN 'pending'
 			     ELSE connections.status END,
 			   responded_at = CASE WHEN ${theyAsked} THEN excluded.created_at WHEN ${reopen} THEN NULL
 			     ELSE connections.responded_at END,
 			   created_at = CASE WHEN ${reopen} THEN excluded.created_at ELSE connections.created_at END,
+			   closed_by = CASE WHEN ${reopen} THEN NULL ELSE connections.closed_by END,
 			   requested_by = CASE WHEN ${reopen} THEN excluded.requested_by ELSE connections.requested_by END
 			 RETURNING id`,
 		)
-		.bind(newId(), lo, hi, u.id, nowIso())
+		.bind(newId(), lo, hi, u.id, nowIso(), lo, hi, hi, lo)
 		.first<{ id: string }>();
-	if (!row) throw new HttpError(500, "internal", "Could not save the request.");
+	if (!row) throw notFound;
 	return c.json({ connection: await connectionView(db, row.id, u.id) });
 });
 
@@ -162,7 +175,10 @@ async function respond(c: import("hono").Context<TgEnv>, to: "accepted" | "decli
 social.post("/connections/:id/accept", ...member, (c) => respond(c, "accepted"));
 social.post("/connections/:id/decline", ...member, (c) => respond(c, "declined"));
 
-/** Either side withdraws a pending request or ends an accepted connection. */
+/**
+ * Either side withdraws a pending request or ends an accepted connection.
+ * closed_by records who: only they may reopen it (see POST /connections).
+ */
 social.post("/connections/:id/close", ...member, async (c) => {
 	const me = c.get("userId");
 	const db = c.env.DB;
@@ -170,18 +186,19 @@ social.post("/connections/:id/close", ...member, async (c) => {
 	if (!conn) throw new HttpError(404, "not_found", "No such connection.");
 	const res = await db
 		.prepare(
-			`UPDATE connections SET status = 'closed', responded_at = ?
+			`UPDATE connections SET status = 'closed', responded_at = ?, closed_by = ?
 			 WHERE id = ? AND status IN ('pending', 'accepted')`,
 		)
-		.bind(nowIso(), conn.id)
+		.bind(nowIso(), me, conn.id)
 		.run();
 	if (!res.meta.changes) throw new HttpError(409, "not_open", "This connection is already closed.");
-	await kick(c.env, "dm", conn.id, [conn.user_lo, conn.user_hi]);
+	deferOf(c)(kick(c.env, "dm", conn.id, [conn.user_lo, conn.user_hi]));
 	return c.json({ connection: await connectionView(db, conn.id, me) });
 });
 
 social.get("/dms/:connectionId/messages", ...member, async (c) => {
 	const me = c.get("userId");
+	await limitMessageRead(c.env.DB, me);
 	const conn = await requireDm(c.env.DB, c.req.param("connectionId"), me);
 	return c.json(
 		await listMessages(c.env.DB, "dm", conn.id, me, {
@@ -195,7 +212,7 @@ social.post("/dms/:connectionId/messages", ...member, async (c) => {
 	const u = c.get("tg");
 	const input = await readJson(c);
 	const conn = await requireDm(c.env.DB, c.req.param("connectionId"), u.id);
-	const message = await sendMessage(c.env, "dm", conn.id, u, input);
+	const message = await sendMessage(c.env, deferOf(c), "dm", conn.id, u, input);
 	return c.json({ message }, 201);
 });
 
@@ -206,7 +223,7 @@ social.post("/blocks", ...adult, async (c) => {
 	const body = BlockRequestSchema.safeParse(await readJson(c));
 	if (!body.success) throw new HttpError(400, "invalid", "Send { user_id }.", body.error.issues);
 	await limitBlock(c.env.DB, me);
-	await blockUser(c.env, me, body.data.user_id);
+	await blockUser(c.env, deferOf(c), me, body.data.user_id);
 	return c.json({ blocked: true });
 });
 

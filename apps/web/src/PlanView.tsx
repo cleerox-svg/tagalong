@@ -9,7 +9,7 @@ import {
 	type PlanPackage,
 	type SavedState,
 } from "./api.js";
-import { navigate } from "./router.js";
+import { linkTo, navigate } from "./router.js";
 import { WhoElse } from "./WhoElse.js";
 
 const LABELS: Record<PlanPackage["label"], string> = {
@@ -306,13 +306,7 @@ export function PlanView(props: { id: string } | { token: string }) {
 			{shared && (
 				<p className="note banner">
 					A trip someone shared with you — read only.{" "}
-					<a
-						href="/"
-						onClick={(e) => {
-							e.preventDefault();
-							navigate("/");
-						}}
-					>
+					<a href="/" onClick={linkTo("/")}>
 						Plan your own
 					</a>
 				</p>
@@ -415,13 +409,7 @@ export function PlanView(props: { id: string } | { token: string }) {
 			)}
 
 			<p>
-				<a
-					href="/"
-					onClick={(e) => {
-						e.preventDefault();
-						navigate("/");
-					}}
-				>
+				<a href="/" onClick={linkTo("/")}>
 					← Plan another trip
 				</a>
 			</p>

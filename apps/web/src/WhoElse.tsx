@@ -1,33 +1,51 @@
 import { INTEREST_MAX, type GroupSummary } from "@tagalong/shared";
 import { useEffect, useId, useState } from "react";
 import { api, ApiError } from "./api.js";
-import { linkTo } from "./Dm.js";
-import { navigate } from "./router.js";
+import { linkTo, navigate } from "./router.js";
 import { TagalongGate, useMe } from "./TagalongGate.js";
 
 /**
  * "Who else is going?" for an event the user has a plan for. Only rendered in
  * the owner's views (plan, saved trips) — never on a public share link.
+ *
+ * Pass `summary` when the caller already has it (My trips gets it with each
+ * row) so a list doesn't make one request per trip; without it, it's fetched.
  */
-export function WhoElse({ eventId, compact = false }: { eventId: string; compact?: boolean }) {
+export function WhoElse({
+	eventId,
+	summary: given,
+	compact = false,
+}: {
+	eventId: string;
+	summary?: GroupSummary;
+	compact?: boolean;
+}) {
 	const ctx = useMe();
-	const [summary, setSummary] = useState<GroupSummary | null>(null);
+	const [fetched, setFetched] = useState<GroupSummary | null>(null);
+	/** Set after a join that didn't navigate; overrides what we were given. */
+	const [local, setLocal] = useState<GroupSummary | null>(null);
 	const [open, setOpen] = useState(false);
 	const [interest, setInterest] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const ids = useId();
 
+	const needFetch = given === undefined;
 	useEffect(() => {
+		setLocal(null);
+		setFetched(null);
+		if (!needFetch) return;
 		let stop = false;
 		api.eventGroup(eventId).then(
-			(s) => !stop && setSummary(s),
-			() => !stop && setSummary(null),
+			(s) => !stop && setFetched(s),
+			() => !stop && setFetched(null),
 		);
 		return () => {
 			stop = true;
 		};
-	}, [eventId]);
+	}, [eventId, needFetch]);
+
+	const summary = local ?? given ?? fetched;
 
 	if (!ctx || !summary) return null;
 	const t = ctx.me.tagalong;
@@ -60,7 +78,7 @@ export function WhoElse({ eventId, compact = false }: { eventId: string; compact
 			const joined = await api.joinGroup(eventId, v === "" ? null : v);
 			if (joined.group_id) navigate(`/groups/${joined.group_id}`);
 			else {
-				setSummary(joined);
+				setLocal(joined);
 				setBusy(false);
 			}
 		} catch (err) {
@@ -90,6 +108,7 @@ export function WhoElse({ eventId, compact = false }: { eventId: string; compact
 			) : !t.opted_in ? (
 				<TagalongGate
 					intro={<p className="muted">Opt in first, then you can join this event's group.</p>}
+					onCancel={() => setOpen(false)}
 				/>
 			) : (
 				<form onSubmit={join} className="tg-join">

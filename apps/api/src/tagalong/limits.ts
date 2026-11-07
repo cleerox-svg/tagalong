@@ -23,7 +23,12 @@ export const LIMITS = {
 	block: { perDay: 200 },
 	/** Opt-in (name/city changes), everyone. */
 	optIn: { perDay: 10 },
+	/** Message list reads (history and polling), group and DM together, everyone. */
+	messageRead: { perMinute: 120 },
 } as const;
+
+/** Most rows a member list, the connections list or the blocks list returns. */
+export const LIST_MAX = 500;
 
 const tier = (u: TagalongUser) => (u.trusted ? "trusted" : "new");
 
@@ -69,4 +74,8 @@ export async function limitOptIn(db: D1Database, userId: string) {
 
 export async function limitWs(db: D1Database, userId: string) {
 	await rateLimit(db, `ws:${userId}`, LIMITS.ws.perMinute, MINUTE);
+}
+
+export async function limitMessageRead(db: D1Database, userId: string) {
+	await rateLimit(db, `tg:msgread:${userId}`, LIMITS.messageRead.perMinute, MINUTE);
 }

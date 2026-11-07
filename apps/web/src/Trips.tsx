@@ -1,7 +1,7 @@
 import { formatMoney } from "@tagalong/shared";
 import { useEffect, useState } from "react";
 import { api, type TripsResponse } from "./api.js";
-import { navigate } from "./router.js";
+import { linkTo } from "./router.js";
 import { WhoElse } from "./WhoElse.js";
 
 const money = (amount_minor: number, currency: string) => formatMoney({ amount_minor, currency });
@@ -21,11 +21,6 @@ export function Trips() {
 	if (error) return <p className="error">{error}</p>;
 	if (!data) return <p className="muted">Loading…</p>;
 
-	const open = (planId: string) => (e: React.MouseEvent) => {
-		e.preventDefault();
-		navigate(`/plans/${planId}`);
-	};
-
 	return (
 		<>
 			<section className="card">
@@ -40,7 +35,7 @@ export function Trips() {
 					{data.trips.map((t) => (
 						<li key={t.plan_id}>
 							<div>
-								<a href={`/plans/${t.plan_id}`} onClick={open(t.plan_id)}>
+								<a href={`/plans/${t.plan_id}`} onClick={linkTo(`/plans/${t.plan_id}`)}>
 									<strong>{t.event_name ?? t.event_query}</strong>
 								</a>
 								<div className="muted">
@@ -54,7 +49,9 @@ export function Trips() {
 										: "Nothing has fit the budget yet"}
 									{t.last_checked_at && ` · checked ${when(t.last_checked_at)}`}
 								</div>
-								{t.event_id && <WhoElse eventId={t.event_id} compact />}
+								{t.event_id && t.group && (
+									<WhoElse eventId={t.event_id} summary={t.group} compact />
+								)}
 							</div>
 							<label className="check">
 								<input
@@ -78,7 +75,7 @@ export function Trips() {
 					<ul className="trips">
 						{data.alerts.map((a) => (
 							<li key={`${a.plan_id}`}>
-								<a href={`/plans/${a.plan_id}`} onClick={open(a.plan_id)}>
+								<a href={`/plans/${a.plan_id}`} onClick={linkTo(`/plans/${a.plan_id}`)}>
 									Down to {money(a.new_total_minor, a.currency)} from{" "}
 									{money(a.old_total_minor, a.currency)}
 								</a>

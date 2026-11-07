@@ -5,6 +5,7 @@
 import { Hono } from "hono";
 import { ModResolveSchema } from "@tagalong/shared";
 import { requireAdult, requireUser } from "../auth/session.js";
+import { deferOf } from "../chat/notify.js";
 import { HttpError, readJson } from "../lib/http.js";
 import { requireTrustedWrite } from "../lib/security.js";
 import { requireModerator, type TgEnv } from "../tagalong/access.js";
@@ -31,7 +32,13 @@ moderation.post("/mod/reports/:id/resolve", ...mod, async (c) => {
 			"action is dismiss, remove_message or suspend_user.",
 			body.error.issues,
 		);
-	const report = await resolveReport(c.env, c.req.param("id"), c.get("userId"), body.data.action);
+	const report = await resolveReport(
+		c.env,
+		deferOf(c),
+		c.req.param("id"),
+		c.get("userId"),
+		body.data.action,
+	);
 	return c.json({ report });
 });
 

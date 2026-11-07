@@ -272,6 +272,8 @@ export interface SavedTrip {
 	party_size: number;
 	/** Set when the API returns it; keys the Tagalong "Who else is going?" group. */
 	event_id?: string | null;
+	/** The event's Tagalong group, sent with the row so the list needs no per-trip fetch. */
+	group?: GroupSummary | null;
 	event_name: string | null;
 	local_date: string | null;
 	venue_name: string | null;
@@ -301,7 +303,7 @@ export function roomPath(kind: RoomKind, id: string): string {
 	return kind === "group" ? `/groups/${enc(id)}` : `/dms/${enc(id)}`;
 }
 
-/** GET …/messages. Cursors are `<created_at>|<id>`. */
+/** GET …/messages. Cursors are a message's `seq` (`messageCursor` in shared). */
 export interface MessagePage {
 	/** Oldest first. */
 	messages: ChatMessage[];

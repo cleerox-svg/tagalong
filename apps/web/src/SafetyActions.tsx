@@ -3,7 +3,12 @@
  * block flows, and the "meet in public places" note shown before anyone's
  * first connect.
  */
-import { REPORT_DETAILS_MAX, REPORT_REASONS, type ReportReason } from "@tagalong/shared";
+import {
+	REPORT_DETAILS_MAX,
+	REPORT_REASONS,
+	type Connection,
+	type ReportReason,
+} from "@tagalong/shared";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "./api.js";
 import { useMe } from "./TagalongGate.js";
@@ -16,8 +21,33 @@ const errText = (err: unknown) =>
 		: "That didn't go through. Check your connection and try again.";
 
 /**
+ * Put focus back after a dialog closes: on the element that opened it when
+ * that's still on the page; otherwise (the row it lived in was removed, say)
+ * on the opener's section — its `[data-focus-return]` element, else its
+ * heading — or the page heading. Leaves focus alone if something else has
+ * already taken it.
+ */
+export function restoreFocus(opener: HTMLElement | null, region: HTMLElement | null): void {
+	const active = document.activeElement;
+	if (active && active !== document.body && active.isConnected && active !== opener) return;
+	if (opener?.isConnected) {
+		opener.focus();
+		if (document.activeElement === opener) return;
+	}
+	const scope = region?.isConnected ? region : null;
+	const target =
+		scope?.querySelector<HTMLElement>("[data-focus-return]") ??
+		scope?.querySelector<HTMLElement>("h1, h2") ??
+		document.querySelector<HTMLElement>("main h1, main h2");
+	if (!target) return;
+	if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+	target.focus();
+}
+
+/**
  * A native modal `<dialog>`: focus moves in on open, is trapped while open,
- * Escape closes it, and focus returns to whatever opened it.
+ * Escape closes it, and focus returns to whatever opened it (or a sensible
+ * fallback when that's gone; see restoreFocus).
  */
 export function Modal({
 	title,
@@ -33,14 +63,17 @@ export function Modal({
 	useEffect(() => {
 		const d = ref.current;
 		if (!d) return;
-		const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		const active = document.activeElement;
+		const opener = active instanceof HTMLElement && active !== document.body ? active : null;
+		const region = opener?.closest<HTMLElement>("section, main") ?? null;
 		if (!d.open) {
 			if (typeof d.showModal === "function") d.showModal();
 			else d.setAttribute("open", "");
 		}
 		return () => {
 			if (d.open) d.close();
-			opener?.focus();
+			// After the commit that closed us settles: the opener may have gone with it.
+			setTimeout(() => restoreFocus(opener, region), 0);
 		};
 	}, []);
 	return (
@@ -231,7 +264,7 @@ export function BlockDialog({
 	userId: string;
 	name: string;
 	onClose: () => void;
-	onBlocked?: (userId: string) => void;
+	onBlocked?: (userId: string) => void | Promise<void>;
 }) {
 	return (
 		<ConfirmDialog
@@ -241,7 +274,7 @@ export function BlockDialog({
 			onClose={onClose}
 			onConfirm={async () => {
 				await api.block(userId);
-				onBlocked?.(userId);
+				await onBlocked?.(userId);
 			}}
 		>
 			<p>
@@ -287,7 +320,6 @@ export function SafetyNoteDialog({
 				<button
 					type="button"
 					className="primary"
-					autoFocus
 					disabled={busy}
 					onClick={async () => {
 						setBusy(true);
@@ -351,23 +383,35 @@ export function useSafetyGate(): {
 	return { run, dialog };
 }
 
+type ConnectResult = "pending" | "accepted" | "failed";
+
+const CONNECT_STATUS: Record<ConnectResult, string> = {
+	pending: "Request sent.",
+	accepted: "Connected — you can message each other now.",
+	failed: "Couldn't send a request.",
+};
+
 /**
- * Connect / Block / Report for another person (a group member row or a
- * profile). Connect goes through the safety gate.
+ * Connect / Block / Report for another person (a group member row, a
+ * profile, a connection row). Connect goes through the safety gate; once
+ * used, its slot stays as a disabled "Requested" / "Connected" button so
+ * focus and layout don't jump.
  */
 export function PersonActions({
 	userId,
 	name,
 	canConnect = true,
 	onBlocked,
+	onConnected,
 }: {
 	userId: string;
 	name: string;
 	canConnect?: boolean;
-	onBlocked?: (userId: string) => void;
+	onBlocked?: (userId: string) => void | Promise<void>;
+	onConnected?: (connection: Connection) => void;
 }) {
 	const [open, setOpen] = useState<"block" | "report" | null>(null);
-	const [status, setStatus] = useState<string | null>(null);
+	const [result, setResult] = useState<ConnectResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const gate = useSafetyGate();
@@ -378,11 +422,9 @@ export function PersonActions({
 			setError(null);
 			try {
 				const res = await api.connect(userId);
-				setStatus(
-					res?.connection?.status === "accepted"
-						? "Connected — you can message each other now."
-						: "Request sent.",
-				);
+				const status = res?.connection?.status;
+				setResult(status === "pending" || status === "accepted" ? status : "failed");
+				if (res?.connection) onConnected?.(res.connection);
 			} catch (err) {
 				if (err instanceof ApiError && err.code === "safety_ack_required") throw err;
 				setError(errText(err));
@@ -391,17 +433,24 @@ export function PersonActions({
 			}
 		});
 
+	const slotText =
+		result === "pending" ? "Requested" : result === "accepted" ? "Connected" : "Connect";
+	// aria-disabled (not disabled) so a focused button keeps focus when it flips.
+	const slotOff = busy || result !== null;
+
 	return (
 		<div className="tg-actions">
-			{canConnect && !status && (
+			{(canConnect || result) && (
 				<button
 					type="button"
-					className="primary"
-					disabled={busy}
-					onClick={() => void connect().catch(() => undefined)}
-					aria-label={`Connect with ${name}`}
+					className={result ? undefined : "primary"}
+					aria-disabled={slotOff || undefined}
+					onClick={() => {
+						if (!slotOff) void connect().catch(() => undefined);
+					}}
+					aria-label={`${slotText}${result ? ":" : " with"} ${name}`}
 				>
-					Connect
+					{busy ? "Sending…" : slotText}
 				</button>
 			)}
 			<button type="button" onClick={() => setOpen("block")} aria-label={`Block ${name}`}>
@@ -410,9 +459,9 @@ export function PersonActions({
 			<button type="button" onClick={() => setOpen("report")} aria-label={`Report ${name}`}>
 				Report
 			</button>
-			{status && (
-				<span className="tg-status" role="status">
-					{status}
+			{result && (
+				<span className={result === "failed" ? "muted" : "tg-status"} role="status">
+					{CONNECT_STATUS[result]}
 				</span>
 			)}
 			{error && (

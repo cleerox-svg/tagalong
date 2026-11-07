@@ -11,24 +11,22 @@ import {
 	type GroupMember,
 	type GroupSummary,
 } from "@tagalong/shared";
-import { requireAdult, requireUser } from "../auth/session.js";
-import { kick } from "../chat/notify.js";
-import { HttpError, newId, nowIso, readJson } from "../lib/http.js";
-import { requireTrustedWrite } from "../lib/security.js";
+import { deferOf, kick } from "../chat/notify.js";
+import { HttpError, invalidInput, newId, nowIso, readJson } from "../lib/http.js";
 import {
+	adult,
 	canSeeEvent,
+	member,
 	NOT_BLOCKED,
 	requireMember,
-	requireTagalong,
 	type TgEnv,
 } from "../tagalong/access.js";
-import { limitJoin } from "../tagalong/limits.js";
+import { LIST_MAX, limitJoin, limitMessageRead } from "../tagalong/limits.js";
 import { deleteOwnMessage, listMessages, sendMessage } from "../tagalong/messages.js";
 
 export const groups = new Hono<TgEnv>();
 
-const adult = [requireTrustedWrite, requireUser, requireAdult] as const;
-const member = [...adult, requireTagalong] as const;
+const INTEREST_RULE = "Interest is up to 140 characters.";
 
 async function summary(db: D1Database, eventId: string, me: string): Promise<GroupSummary> {
 	const row = await db
@@ -61,8 +59,7 @@ groups.post("/events/:eventId/group/join", ...member, async (c) => {
 	const u = c.get("tg");
 	const eventId = c.req.param("eventId");
 	const body = JoinGroupSchema.safeParse(await readJson(c));
-	if (!body.success)
-		throw new HttpError(400, "invalid", "Interest is up to 140 characters.", body.error.issues);
+	if (!body.success) throw invalidInput(body.error.issues, INTEREST_RULE);
 	if (!(await canSeeEvent(c.env.DB, u.id, eventId)))
 		throw new HttpError(404, "not_found", "No such event.");
 	await limitJoin(c.env.DB, u);
@@ -76,20 +73,15 @@ groups.post("/events/:eventId/group/join", ...member, async (c) => {
 		.first<{ id: string }>();
 	if (!group) throw new HttpError(500, "internal", "Could not open the group.");
 
+	// Interest on (re)join, one statement: omitted keeps what a member already
+	// had (NULL for a new member), null clears it, a string replaces it.
 	const interest = body.data.interest;
-	// Omitted interest keeps what a returning member had; null clears it.
 	await c.env.DB.prepare(
-		interest === undefined
-			? `INSERT INTO group_members (group_id, user_id, interest, joined_at) VALUES (?, ?, NULL, ?)
-			   ON CONFLICT (group_id, user_id) DO NOTHING`
-			: `INSERT INTO group_members (group_id, user_id, interest, joined_at) VALUES (?, ?, ?, ?)
-			   ON CONFLICT (group_id, user_id) DO UPDATE SET interest = excluded.interest`,
+		`INSERT INTO group_members (group_id, user_id, interest, joined_at) VALUES (?, ?, ?, ?)
+		 ON CONFLICT (group_id, user_id) DO UPDATE SET
+		   interest = CASE WHEN ? = 1 THEN excluded.interest ELSE group_members.interest END`,
 	)
-		.bind(
-			...(interest === undefined
-				? [group.id, u.id, nowIso()]
-				: [group.id, u.id, interest, nowIso()]),
-		)
+		.bind(group.id, u.id, interest ?? null, nowIso(), interest === undefined ? 0 : 1)
 		.run();
 	return c.json(await summary(c.env.DB, eventId, u.id));
 });
@@ -101,15 +93,14 @@ groups.post("/groups/:id/leave", ...member, async (c) => {
 		.bind(groupId, me)
 		.run();
 	if (!res.meta.changes) throw new HttpError(404, "not_found", "No such group.");
-	await kick(c.env, "group", groupId, [me]);
+	deferOf(c)(kick(c.env, "group", groupId, [me]));
 	return c.json({ left: true });
 });
 
 groups.post("/groups/:id/interest", ...member, async (c) => {
 	const me = c.get("userId");
 	const body = SetInterestSchema.safeParse(await readJson(c));
-	if (!body.success)
-		throw new HttpError(400, "invalid", "Interest is up to 140 characters.", body.error.issues);
+	if (!body.success) throw invalidInput(body.error.issues, INTEREST_RULE);
 	const interest = body.data.interest ?? null;
 	const res = await c.env.DB.prepare(
 		"UPDATE group_members SET interest = ? WHERE group_id = ? AND user_id = ?",
@@ -141,9 +132,9 @@ groups.get("/groups/:id", ...member, async (c) => {
 			 WHERE m.group_id = ? AND u.tagalong_opt_in_at IS NOT NULL
 			   AND u.tagalong_suspended_at IS NULL AND u.tagalong_name IS NOT NULL
 			   AND ${NOT_BLOCKED("m.user_id")}
-			 ORDER BY m.joined_at, m.user_id`,
+			 ORDER BY m.joined_at, m.user_id LIMIT ?`,
 		)
-		.bind(groupId, me, me)
+		.bind(groupId, me, me, LIST_MAX)
 		.all<Omit<GroupMember, "is_me"> & { city: string | null }>();
 	const members: GroupMember[] = results.map((r) => ({
 		user_id: r.user_id,
@@ -159,6 +150,7 @@ groups.get("/groups/:id", ...member, async (c) => {
 groups.get("/groups/:id/messages", ...member, async (c) => {
 	const me = c.get("userId");
 	const groupId = c.req.param("id");
+	await limitMessageRead(c.env.DB, me);
 	await requireMember(c.env.DB, groupId, me);
 	return c.json(
 		await listMessages(c.env.DB, "group", groupId, me, {
@@ -173,12 +165,12 @@ groups.post("/groups/:id/messages", ...member, async (c) => {
 	const groupId = c.req.param("id");
 	const input = await readJson(c);
 	await requireMember(c.env.DB, groupId, u.id);
-	const message = await sendMessage(c.env, "group", groupId, u, input);
+	const message = await sendMessage(c.env, deferOf(c), "group", groupId, u, input);
 	return c.json({ message }, 201);
 });
 
 /** The author deletes their own message (group or DM). Broadcasts {type:'deleted'}. */
 groups.post("/messages/:id/delete", ...member, async (c) => {
-	await deleteOwnMessage(c.env, c.req.param("id"), c.get("userId"));
+	await deleteOwnMessage(c.env, deferOf(c), c.req.param("id"), c.get("userId"));
 	return c.json({ deleted: true });
 });

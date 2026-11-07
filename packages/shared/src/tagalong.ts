@@ -136,8 +136,21 @@ export function containsUrl(text: string): boolean {
 	);
 }
 
-/** Control, zero-width and bidi-override characters: never allowed in a name or interest. */
-const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/;
+/**
+ * Invisible formatting characters that can disguise text: zero-width
+ * (U+200B\u2013U+200D, U+2060\u2013U+2064, U+FEFF), bidi marks (U+061C, U+200E,
+ * U+200F), bidi embeddings / overrides (U+202A\u2013U+202E) and isolates
+ * (U+2066\u2013U+2069).
+ */
+const INVISIBLE = String.raw`\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff`;
+
+/** C0 / C1 controls plus the invisible set: never allowed in a name or interest. */
+const CONTROL_RE = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f${INVISIBLE}]`);
+
+/** As CONTROL_RE but a line feed is allowed: what a message body refuses. */
+const MESSAGE_FORBIDDEN_RE = new RegExp(
+	String.raw`[\u0000-\u0009\u000b-\u001f\u007f-\u009f${INVISIBLE}]`,
+);
 
 /**
  * A city label is letters (any script), spaces and `. , ' ’ - ( )`; it must
@@ -183,20 +196,41 @@ export type TagalongOptIn = z.infer<typeof TagalongOptInSchema>;
 
 /**
  * What a member is interested in ("looking for pre-game food"). Trimmed;
- * an empty string becomes null. Optional and nullable.
+ * an empty string becomes null. Optional and nullable. Shown to every group
+ * member, so links / e-mail addresses and control or invisible characters
+ * are refused for everyone, as for a name.
  */
 export const InterestSchema = z
 	.string()
 	.trim()
 	.max(INTEREST_MAX)
 	.refine((s) => !CONTROL_RE.test(s), "No control characters")
+	.refine((s) => !containsUrl(s), "No links or e-mail addresses in an interest")
 	.transform((s) => (s === "" ? null : s))
 	.nullable()
 	.optional();
 export type Interest = z.infer<typeof InterestSchema>;
 
-/** A chat message body (group or DM). */
-export const MessageBodySchema = z.string().trim().min(1).max(MESSAGE_BODY_MAX);
+/**
+ * A chat message body (group or DM). Line breaks are kept: CRLF and lone CR
+ * are normalised to LF first. Every other control character (tab included)
+ * and the invisible zero-width / bidi characters are refused. Trimmed, then
+ * 1 to MESSAGE_BODY_MAX characters (UTF-16 code units).
+ */
+export const MessageBodySchema = z
+	.string()
+	.transform((s) => s.replace(/\r\n?/g, "\n"))
+	.pipe(
+		z
+			.string()
+			.trim()
+			.min(1)
+			.max(MESSAGE_BODY_MAX)
+			.refine(
+				(s) => !MESSAGE_FORBIDDEN_RE.test(s),
+				"No control, zero-width or text-direction characters (line breaks are fine)",
+			),
+	);
 
 /** POST /groups/:id/messages and POST /dms/:connectionId/messages */
 export const SendMessageSchema = z.object({ body: MessageBodySchema });
@@ -292,10 +326,34 @@ export interface ChatMessage {
 	user_id: string;
 	name: string;
 	body: string;
+	/**
+	 * Monotonic per-message sequence number, assigned at insert in commit
+	 * order. Messages are ordered and paged by it (see messageCursor).
+	 */
+	seq: number;
 	created_at: string;
 	is_me: boolean;
 }
 
+/** Longest cursor accepted: Number.MAX_SAFE_INTEGER has 16 digits. */
+const MESSAGE_CURSOR_MAX_LEN = 16;
+
+/** The paging cursor for a message: its `seq` in decimal. */
+export function messageCursor(m: Pick<ChatMessage, "seq">): string {
+	return String(m.seq);
+}
+
+/**
+ * Parses a message cursor. Accepts only a non-negative safe integer in plain
+ * decimal (digits only: no sign, leading zeros, spaces, fraction or exponent;
+ * at most 16 digits). Anything else returns null.
+ */
+export function parseMessageCursor(s: string): number | null {
+	if (typeof s !== "string" || s.length === 0 || s.length > MESSAGE_CURSOR_MAX_LEN) return null;
+	if (!/^(?:0|[1-9][0-9]*)$/.test(s)) return null;
+	const n = Number(s);
+	return Number.isSafeInteger(n) ? n : null;
+}
 /** Fan-out over the chat socket. */
 export type ChatEvent = { type: "message"; message: ChatMessage } | { type: "deleted"; id: string };
 

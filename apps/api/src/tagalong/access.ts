@@ -7,7 +7,9 @@
  */
 import type { TagalongStatus } from "@tagalong/shared";
 import { createMiddleware } from "hono/factory";
+import { requireAdult, requireUser } from "../auth/session.js";
 import { HttpError } from "../lib/http.js";
+import { requireTrustedWrite } from "../lib/security.js";
 
 /** The session user's Tagalong state, loaded once per request by requireTagalong. */
 export interface TagalongUser {
@@ -86,6 +88,11 @@ export const requireTagalong = createMiddleware<TgEnv>(async (c, next) => {
 	return next();
 });
 
+/** Route middleware: CSRF/origin check, signed in, 18+. */
+export const adult = [requireTrustedWrite, requireUser, requireAdult] as const;
+/** As `adult`, plus opted in to Tagalong and not suspended. */
+export const member = [...adult, requireTagalong] as const;
+
 // ---------------------------------------------------------------------------
 // Moderators
 // ---------------------------------------------------------------------------
@@ -128,18 +135,6 @@ export async function isBlockedEitherWay(db: D1Database, a: string, b: string): 
 	return row !== null;
 }
 
-/** Everyone in a block relation with `userId`, either direction (for broadcast exclusion). */
-export async function blockRelatedIds(db: D1Database, userId: string): Promise<string[]> {
-	const { results } = await db
-		.prepare(
-			`SELECT blocked_id AS id FROM blocks WHERE blocker_id = ?
-			 UNION SELECT blocker_id AS id FROM blocks WHERE blocked_id = ?`,
-		)
-		.bind(userId, userId)
-		.all<{ id: string }>();
-	return results.map((r) => r.id);
-}
-
 /**
  * The user owns a plan for this event: the plan's resolved event, or the event
  * of one of its packages (an alternative date). This is how a group is found.
@@ -178,7 +173,15 @@ export interface ConnectionRow {
 	status: "pending" | "accepted" | "declined" | "closed";
 	created_at: string;
 	responded_at: string | null;
+	/** Who closed it (0007); null when open, declined, or closed before 0007. */
+	closed_by: string | null;
 }
+
+export const CONNECTION_ROW_COLUMNS =
+	"id, user_lo, user_hi, requested_by, status, created_at, responded_at, closed_by";
+
+/** The pair key for connections: [user_lo, user_hi]. */
+export const pairOf = (a: string, b: string): [string, string] => (a < b ? [a, b] : [b, a]);
 
 export const otherParty = (conn: ConnectionRow, me: string) =>
 	conn.user_lo === me ? conn.user_hi : conn.user_lo;
@@ -191,10 +194,23 @@ export async function loadConnection(
 ): Promise<ConnectionRow | null> {
 	return db
 		.prepare(
-			`SELECT id, user_lo, user_hi, requested_by, status, created_at, responded_at
+			`SELECT ${CONNECTION_ROW_COLUMNS}
 			 FROM connections WHERE id = ? AND (user_lo = ? OR user_hi = ?)`,
 		)
 		.bind(connectionId, userId, userId)
+		.first<ConnectionRow>();
+}
+
+/** The connection between two users, whichever side asked, else null. */
+export async function loadConnectionByPair(
+	db: D1Database,
+	a: string,
+	b: string,
+): Promise<ConnectionRow | null> {
+	const [lo, hi] = pairOf(a, b);
+	return db
+		.prepare(`SELECT ${CONNECTION_ROW_COLUMNS} FROM connections WHERE user_lo = ? AND user_hi = ?`)
+		.bind(lo, hi)
 		.first<ConnectionRow>();
 }
 

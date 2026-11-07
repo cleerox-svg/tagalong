@@ -22,7 +22,16 @@ export function useMe(): MeCtx | null {
  * Opt in to Tagalong. Users are already 18+ (confirmed at onboarding); here
  * they pick the only two things anyone else will ever see: a name and a city.
  */
-export function TagalongGate({ onDone, intro }: { onDone?: () => void; intro?: ReactNode }) {
+export function TagalongGate({
+	onDone,
+	onCancel,
+	intro,
+}: {
+	onDone?: () => void;
+	/** When set, a Cancel button closes the gate (it's opened from another screen). */
+	onCancel?: () => void;
+	intro?: ReactNode;
+}) {
 	const ctx = useMe();
 	const me = ctx?.me;
 	const [name, setName] = useState("");
@@ -78,8 +87,9 @@ export function TagalongGate({ onDone, intro }: { onDone?: () => void; intro?: R
 			</p>
 			<ul className="tg-points">
 				<li>
-					Other people see <strong>only</strong> the name and city you enter below — never your
-					e-mail, your Google name, your address or your exact location.
+					Other people see <strong>only</strong> the name and city you enter below, plus anything
+					you choose to write — never your e-mail, your Google name, your address or your exact
+					location.
 				</li>
 				<li>Tagalong is for adults only. You confirmed you're 18 or older when you signed up.</li>
 				<li>You can block or report anyone, and leave Tagalong at any time.</li>
@@ -131,9 +141,16 @@ export function TagalongGate({ onDone, intro }: { onDone?: () => void; intro?: R
 						{errors.form}
 					</p>
 				)}
-				<button className="primary" disabled={busy}>
-					{busy ? "Joining…" : "Join Tagalong"}
-				</button>
+				<div className="tg-actions">
+					<button className="primary" disabled={busy}>
+						{busy ? "Joining…" : "Join Tagalong"}
+					</button>
+					{onCancel && (
+						<button type="button" onClick={onCancel}>
+							Cancel
+						</button>
+					)}
+				</div>
 			</form>
 		</section>
 	);

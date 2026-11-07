@@ -95,22 +95,39 @@ trips.get("/plans/:id/saved", ...signedIn, async (c) => {
 	});
 });
 
-/** My trips: saved trips with their newest plan. */
+/**
+ * My trips: saved trips with their newest plan. Each trip carries its event's
+ * Tagalong group, `{ group_id, member_count, joined }` (group_id null and
+ * count 0 when nobody has opened one yet), or null when the plan has no
+ * event; computed in this one query, not per trip.
+ */
 trips.get("/trips", ...signedIn, async (c) => {
 	const userId = c.get("userId");
 	const { results } = await c.env.DB.prepare(
 		`SELECT s.latest_plan_id AS plan_id, s.alerts_enabled, s.best_total_minor, s.currency, s.last_checked_at,
 		   s.created_at AS saved_at, t.event_query, t.origin_city, t.party_size, t.budget_minor, t.budget_scope,
-		   p.event_id, e.name AS event_name, e.local_date, e.venue_name, e.city AS event_city, p.status
+		   p.event_id, e.name AS event_name, e.local_date, e.venue_name, e.city AS event_city, p.status,
+		   g.id AS g_id,
+		   (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) AS g_member_count,
+		   EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = g.id AND gm.user_id = s.user_id)
+		     AS g_joined
 		 FROM saved_trips s
 		 JOIN trip_requests t ON t.id = s.trip_request_id
 		 JOIN plans p ON p.id = s.latest_plan_id AND p.user_id = s.user_id
 		 LEFT JOIN events e ON e.id = p.event_id
+		 LEFT JOIN event_groups g ON g.event_id = p.event_id
 		 WHERE s.user_id = ?
 		 ORDER BY COALESCE(e.local_date, t.date_from)`,
 	)
 		.bind(userId)
-		.all<Record<string, unknown>>();
+		.all<
+			Record<string, unknown> & {
+				event_id: string | null;
+				g_id: string | null;
+				g_member_count: number;
+				g_joined: number;
+			}
+		>();
 	const { results: alerts } = await c.env.DB.prepare(
 		`SELECT a.trip_request_id, a.plan_id, a.old_total_minor, a.new_total_minor, a.currency, a.created_at, a.emailed_at
 		 FROM price_alerts a WHERE a.user_id = ? ORDER BY a.created_at DESC LIMIT 20`,
@@ -118,7 +135,13 @@ trips.get("/trips", ...signedIn, async (c) => {
 		.bind(userId)
 		.all();
 	return c.json({
-		trips: results.map((r) => ({ ...r, alerts_enabled: r.alerts_enabled === 1 })),
+		trips: results.map(({ g_id, g_member_count, g_joined, ...r }) => ({
+			...r,
+			alerts_enabled: r.alerts_enabled === 1,
+			group: r.event_id
+				? { group_id: g_id, member_count: g_id ? g_member_count : 0, joined: g_joined === 1 }
+				: null,
+		})),
 		alerts,
 	});
 });

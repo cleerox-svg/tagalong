@@ -5,17 +5,13 @@ import {
 	type Connection,
 	type RoomKind,
 } from "@tagalong/shared";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api.js";
-import { useChat } from "./chat.js";
-import { navigate } from "./router.js";
+import { announcementFor, maxSeq, useChat } from "./chat.js";
+import { BackLink, ErrorCard } from "./ErrorCard.js";
+import { linkTo, navigate } from "./router.js";
 import { BlockDialog, ConfirmDialog, ReportDialog } from "./SafetyActions.js";
 import { useMe } from "./TagalongGate.js";
-
-export const linkTo = (to: string) => (e: React.MouseEvent) => {
-	e.preventDefault();
-	navigate(to);
-};
 
 const time = (iso: string) => {
 	const d = new Date(iso);
@@ -37,8 +33,18 @@ function MessageRow({
 }) {
 	const [open, setOpen] = useState(false);
 	const menuId = useId();
+	const toggle = useRef<HTMLButtonElement>(null);
 	return (
-		<li className={m.is_me ? "tg-msg mine" : "tg-msg"}>
+		<li
+			className={m.is_me ? "tg-msg mine" : "tg-msg"}
+			onKeyDown={(e) => {
+				if (e.key === "Escape" && open) {
+					e.stopPropagation();
+					setOpen(false);
+					toggle.current?.focus();
+				}
+			}}
+		>
 			<div className="tg-msg-head">
 				<span className="tg-msg-name">
 					{m.is_me ? (
@@ -53,6 +59,7 @@ function MessageRow({
 					{time(m.created_at)}
 				</time>
 				<button
+					ref={toggle}
 					type="button"
 					className="tg-more"
 					aria-expanded={open}
@@ -90,13 +97,26 @@ function MessageRow({
 export function ChatPanel({
 	kind,
 	id,
+	hiddenAuthors,
 	onBlocked,
 }: {
 	kind: RoomKind;
 	id: string;
+	/** People blocked elsewhere on the screen (e.g. the member list): their messages are hidden. */
+	hiddenAuthors?: ReadonlySet<string>;
 	onBlocked?: (userId: string) => void;
 }) {
 	const chat = useChat(kind, id);
+	/** Blocked from this chat's own menu; kept so a late poll can't show them again. */
+	const [blockedHere, setBlockedHere] = useState<ReadonlySet<string>>(() => new Set());
+	const messages = useMemo(
+		() =>
+			chat.messages.filter((m) => !blockedHere.has(m.user_id) && !hiddenAuthors?.has(m.user_id)),
+		[chat.messages, blockedHere, hiddenAuthors],
+	);
+	const [announce, setAnnounce] = useState("");
+	/** Newest seq already accounted for; null until the first load is in. */
+	const seenSeq = useRef<number | null>(null);
 	const ctx = useMe();
 	const [draft, setDraft] = useState("");
 	const [sending, setSending] = useState(false);
@@ -109,7 +129,31 @@ export function ChatPanel({
 	useLayoutEffect(() => {
 		const el = logRef.current;
 		if (el && nearBottom.current) el.scrollTop = el.scrollHeight;
-	}, [chat.messages]);
+	}, [messages]);
+
+	// A new room starts quiet again.
+	useEffect(() => {
+		seenSeq.current = null;
+		setAnnounce("");
+		setBlockedHere(new Set());
+	}, [kind, id]);
+
+	// Announce only new messages from other people, once the first load is in:
+	// never the history, "load earlier", or your own sends.
+	useEffect(() => {
+		if (!chat.loaded) {
+			seenSeq.current = null;
+			return;
+		}
+		const newest = maxSeq(messages);
+		if (seenSeq.current === null) {
+			seenSeq.current = newest ?? -1;
+			return;
+		}
+		const text = announcementFor(messages, seenSeq.current);
+		if (newest !== null && newest > seenSeq.current) seenSeq.current = newest;
+		if (text) setAnnounce(text);
+	}, [chat.loaded, messages]);
 
 	const newAccount = ctx ? !ctx.me.tagalong.trusted : false;
 	const linkWarning = newAccount && containsUrl(draft);
@@ -132,7 +176,9 @@ export function ChatPanel({
 						? "Live"
 						: chat.connection === "connecting"
 							? "Connecting…"
-							: "Reconnecting — checking every few seconds"}
+							: chat.connection === "closed"
+								? "Disconnected"
+								: "Checking for new messages every few seconds"}
 				</span>
 			</div>
 			<div
@@ -140,6 +186,7 @@ export function ChatPanel({
 				ref={logRef}
 				tabIndex={0}
 				aria-label="Chat messages"
+				data-focus-return
 				onScroll={(e) => {
 					const el = e.currentTarget;
 					nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -151,15 +198,18 @@ export function ChatPanel({
 					</button>
 				)}
 				{!chat.loaded && <p className="muted">Loading messages…</p>}
-				{chat.loaded && chat.messages.length === 0 && (
+				{chat.loaded && messages.length === 0 && (
 					<p className="muted">No messages yet. Say hello!</p>
 				)}
-				<ol className="tg-msgs" aria-live="polite" aria-relevant="additions">
-					{chat.messages.map((m) => (
+				<ol className="tg-msgs">
+					{messages.map((m) => (
 						<MessageRow key={m.id} m={m} onAction={(k) => setDialog({ kind: k, message: m })} />
 					))}
 				</ol>
 			</div>
+			<p className="sr-only" role="status" aria-live="polite">
+				{announce}
+			</p>
 			{chat.error && (
 				<p className="error" role="alert">
 					{chat.error}
@@ -222,6 +272,7 @@ export function ChatPanel({
 					onClose={() => setDialog(null)}
 					onBlocked={(uid) => {
 						chat.hideAuthor(uid);
+						setBlockedHere((b) => (b.has(uid) ? b : new Set(b).add(uid)));
 						onBlocked?.(uid);
 					}}
 				/>
@@ -249,6 +300,9 @@ export function Dm({ connectionId }: { connectionId: string }) {
 
 	useEffect(() => {
 		let stop = false;
+		setConn(undefined);
+		setError(null);
+		setDialog(null);
 		api.connections().then(
 			(r) => {
 				if (!stop) setConn(r.connections.find((c) => c.id === connectionId) ?? null);
@@ -263,16 +317,14 @@ export function Dm({ connectionId }: { connectionId: string }) {
 		};
 	}, [connectionId]);
 
-	if (error) return <p className="error">{error}</p>;
+	if (error) return <ErrorCard message={error} />;
 	if (conn === undefined) return <p className="muted">Loading…</p>;
 	if (!conn || conn.status !== "accepted")
 		return (
 			<section className="card">
 				<h1>This conversation isn't open</h1>
 				<p>Messages only work while you're both connected.</p>
-				<a href="/connections" onClick={linkTo("/connections")}>
-					← Back to Tagalong
-				</a>
+				<BackLink label="Back to Tagalong" />
 			</section>
 		);
 
@@ -282,9 +334,7 @@ export function Dm({ connectionId }: { connectionId: string }) {
 		<>
 			<section className="card">
 				<p>
-					<a href="/connections" onClick={linkTo("/connections")}>
-						← Tagalong
-					</a>
+					<BackLink />
 				</p>
 				<h1>
 					<a

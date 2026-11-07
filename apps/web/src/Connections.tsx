@@ -1,7 +1,8 @@
 import type { BlockedUser, Connection, TagalongProfile } from "@tagalong/shared";
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "./api.js";
-import { linkTo } from "./Dm.js";
+import { BackLink, ErrorCard } from "./ErrorCard.js";
+import { linkTo } from "./router.js";
 import { ConfirmDialog, PersonActions, useSafetyGate } from "./SafetyActions.js";
 import { useMe } from "./TagalongGate.js";
 
@@ -10,12 +11,12 @@ const errText = (err: unknown) =>
 
 function Person({ c }: { c: Connection }) {
 	return (
-		<span>
+		<div>
 			<a href={`/people/${c.other_user_id}`} onClick={linkTo(`/people/${c.other_user_id}`)}>
 				<strong>{c.other_name}</strong>
 			</a>{" "}
 			<span className="muted">· {c.other_city}</span>
-		</span>
+		</div>
 	);
 }
 
@@ -60,13 +61,37 @@ export function Connections() {
 	};
 
 	if (!ctx) return null;
-	if (error) return <p className="error">{error}</p>;
+	if (error)
+		return (
+			<ErrorCard message={error} to="/trips" label="My trips">
+				<p>
+					<button
+						type="button"
+						onClick={() => {
+							setError(null);
+							void load();
+						}}
+					>
+						Try again
+					</button>
+				</p>
+			</ErrorCard>
+		);
 	if (!conns || !blocks) return <p className="muted">Loading…</p>;
 
 	const incoming = conns.filter((c) => c.status === "pending" && !c.requested_by_me);
 	const outgoing = conns.filter((c) => c.status === "pending" && c.requested_by_me);
 	const accepted = conns.filter((c) => c.status === "accepted");
 	const t = ctx.me.tagalong;
+	/** Block / Report on a row; blocking closes the connection, so re-read the lists. */
+	const safety = (c: Connection) => (
+		<PersonActions
+			userId={c.other_user_id}
+			name={c.other_name}
+			canConnect={false}
+			onBlocked={load}
+		/>
+	);
 
 	return (
 		<>
@@ -122,6 +147,7 @@ export function Connections() {
 									Decline
 								</button>
 							</div>
+							{safety(c)}
 						</li>
 					))}
 				</ul>
@@ -150,6 +176,7 @@ export function Connections() {
 									End
 								</button>
 							</div>
+							{safety(c)}
 						</li>
 					))}
 				</ul>
@@ -170,6 +197,7 @@ export function Connections() {
 								>
 									Cancel request
 								</button>
+								{safety(c)}
 							</li>
 						))}
 					</ul>
@@ -182,7 +210,7 @@ export function Connections() {
 				<ul className="tg-members">
 					{blocks.map((b) => (
 						<li key={b.user_id}>
-							<span>{b.name ?? "A Tagalong member"}</span>
+							<div>{b.name ?? "A Tagalong member"}</div>
 							<button
 								type="button"
 								disabled={busy === b.user_id}
@@ -256,6 +284,9 @@ export function Profile({ userId }: { userId: string }) {
 
 	useEffect(() => {
 		let stop = false;
+		setP(null);
+		setError(null);
+		setBlocked(false);
 		api.profile(userId).then(
 			(r) => !stop && setP(r),
 			(err: unknown) =>
@@ -271,16 +302,27 @@ export function Profile({ userId }: { userId: string }) {
 		};
 	}, [userId]);
 
-	if (error) return <p className="error">{error}</p>;
-	if (!p) return <p className="muted">Loading…</p>;
+	if (error) return <ErrorCard message={error} />;
+	if (!p || p.user_id !== userId) return <p className="muted">Loading…</p>;
 	if (blocked)
 		return (
 			<section className="card">
 				<p>You've blocked {p.name}. You can unblock them from the Tagalong page.</p>
-				<a href="/connections" onClick={linkTo("/connections")}>
-					← Tagalong
-				</a>
+				<BackLink />
 			</section>
+		);
+
+	/** Reflect a connect straight away, without re-reading the profile. */
+	const connected = (c: Connection) =>
+		setP((cur) =>
+			cur && cur.user_id === c.other_user_id
+				? {
+						...cur,
+						connection_id: c.id,
+						connection_status: c.status,
+						requested_by_me: c.requested_by_me,
+					}
+				: cur,
 		);
 
 	return (
@@ -332,6 +374,7 @@ export function Profile({ userId }: { userId: string }) {
 			)}
 			{!p.is_me && (
 				<PersonActions
+					key={p.user_id}
 					userId={p.user_id}
 					name={p.name}
 					canConnect={
@@ -340,6 +383,7 @@ export function Profile({ userId }: { userId: string }) {
 						p.connection_status === "closed"
 					}
 					onBlocked={() => setBlocked(true)}
+					onConnected={connected}
 				/>
 			)}
 		</section>

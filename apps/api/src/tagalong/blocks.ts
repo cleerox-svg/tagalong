@@ -4,31 +4,38 @@
  * closes any connection between the two and drops their DM sockets.
  */
 import type { BlockedUser } from "@tagalong/shared";
-import { kick } from "../chat/notify.js";
+import { kick, type Defer } from "../chat/notify.js";
 import { HttpError, nowIso } from "../lib/http.js";
+import { pairOf } from "./access.js";
+import { LIST_MAX } from "./limits.js";
 
-export async function blockUser(env: Env, me: string, target: string): Promise<void> {
+/**
+ * Blocks `target`. Answers the same whether or not `target` is a real user
+ * (no account-existence oracle); a row is only written for one that exists.
+ */
+export async function blockUser(env: Env, defer: Defer, me: string, target: string): Promise<void> {
 	if (target === me) throw new HttpError(400, "invalid", "You can't block yourself.");
-	const exists = await env.DB.prepare("SELECT 1 AS x FROM users WHERE id = ?").bind(target).first();
-	if (!exists) throw new HttpError(404, "not_found", "No such user.");
 
-	const [lo, hi] = me < target ? [me, target] : [target, me];
+	const [lo, hi] = pairOf(me, target);
 	const now = nowIso();
 	await env.DB.batch([
 		env.DB.prepare(
-			`INSERT INTO blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)
+			`INSERT INTO blocks (blocker_id, blocked_id, created_at)
+			 SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)
 			 ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
-		).bind(me, target, now),
+		).bind(me, target, now, target),
 		env.DB.prepare(
-			`UPDATE connections SET status = 'closed', responded_at = ?
+			`UPDATE connections SET status = 'closed', responded_at = ?, closed_by = ?
 			 WHERE user_lo = ? AND user_hi = ? AND status IN ('pending', 'accepted')`,
-		).bind(now, lo, hi),
+		).bind(now, me, lo, hi),
 	]);
-	// Drop both sides' DM sockets, whatever the connection's status was.
+	// Drop both sides' DM sockets, whatever the connection's status was. No
+	// connection row means there is nothing to drop (and says nothing about
+	// whether the user exists: most pairs never connected).
 	const conn = await env.DB.prepare("SELECT id FROM connections WHERE user_lo = ? AND user_hi = ?")
 		.bind(lo, hi)
 		.first<{ id: string }>();
-	if (conn) await kick(env, "dm", conn.id, [me, target]);
+	if (conn) defer(kick(env, "dm", conn.id, [me, target]));
 }
 
 export async function unblockUser(db: D1Database, me: string, target: string): Promise<void> {
@@ -38,15 +45,15 @@ export async function unblockUser(db: D1Database, me: string, target: string): P
 		.run();
 }
 
-/** Who I have blocked (not who blocked me: that is never revealed). */
+/** Who I have blocked (not who blocked me: that is never revealed). Newest first, capped. */
 export async function listBlocks(db: D1Database, me: string): Promise<BlockedUser[]> {
 	const { results } = await db
 		.prepare(
 			`SELECT b.blocked_id AS user_id, u.tagalong_name AS name, b.created_at AS blocked_at
 			 FROM blocks b JOIN users u ON u.id = b.blocked_id
-			 WHERE b.blocker_id = ? ORDER BY b.created_at DESC`,
+			 WHERE b.blocker_id = ? ORDER BY b.created_at DESC LIMIT ?`,
 		)
-		.bind(me)
+		.bind(me, LIST_MAX)
 		.all<BlockedUser>();
 	return results;
 }

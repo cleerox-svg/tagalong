@@ -6,7 +6,7 @@
  * HTTP POST (CSRF rule). D1 is the only store, so when the socket is down we
  * poll `GET …/messages?after=<cursor>` and merge; merging is idempotent.
  */
-import type { ChatEvent, ChatMessage, RoomKind } from "@tagalong/shared";
+import { messageCursor, type ChatEvent, type ChatMessage, type RoomKind } from "@tagalong/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, API_BASE, ApiError } from "./api.js";
 
@@ -23,9 +23,12 @@ export interface ChatState {
 
 export const EMPTY_CHAT: ChatState = { messages: [], deleted: new Set() };
 
-/** Oldest first: by created_at, then id so equal timestamps have a stable order. */
+/**
+ * Oldest first, by the server's `seq` (commit order, so equal timestamps
+ * can't reorder); id breaks a tie so the order is total even on bad data.
+ */
 export function compareMessages(a: ChatMessage, b: ChatMessage): number {
-	if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;
+	if (a.seq !== b.seq) return a.seq < b.seq ? -1 : 1;
 	if (a.id === b.id) return 0;
 	return a.id < b.id ? -1 : 1;
 }
@@ -42,7 +45,8 @@ export function mergeMessages(state: ChatState, incoming: readonly ChatMessage[]
 	for (const m of incoming) {
 		if (state.deleted.has(m.id)) continue;
 		const prev = byId.get(m.id);
-		if (prev && prev.body === m.body && prev.created_at === m.created_at) continue;
+		if (prev && prev.body === m.body && prev.seq === m.seq && prev.created_at === m.created_at)
+			continue;
 		byId.set(m.id, m);
 		changed = true;
 	}
@@ -70,24 +74,45 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
 		: removeMessage(state, event.id);
 }
 
-/** The API's page marker: `<created_at>|<id>`, matching its (created_at, id) order. */
-export const cursorOf = (m: Pick<ChatMessage, "created_at" | "id">) => `${m.created_at}|${m.id}`;
-
 /** The `after` cursor for polling and catch-up: the newest message, or null when empty. */
 export function pollCursor(state: ChatState): string | null {
 	const last = state.messages.at(-1);
-	return last ? cursorOf(last) : null;
+	return last ? messageCursor(last) : null;
 }
 
 /** The `before` cursor for loading earlier messages: the oldest message, or null when empty. */
 export function olderCursor(state: ChatState): string | null {
 	const first = state.messages[0];
-	return first ? cursorOf(first) : null;
+	return first ? messageCursor(first) : null;
+}
+
+/** The highest `seq` in the list, or null when empty. */
+export function maxSeq(messages: readonly ChatMessage[]): number | null {
+	return messages.length === 0 ? null : (messages.at(-1)?.seq ?? null);
+}
+
+/**
+ * What a screen reader should hear after the list changed: only messages from
+ * other people with a `seq` above `sinceSeq` (so history, "load earlier" and
+ * your own sends stay quiet). Null when there is nothing to announce.
+ */
+export function announcementFor(
+	messages: readonly ChatMessage[],
+	sinceSeq: number | null,
+): string | null {
+	if (sinceSeq === null) return null;
+	const fresh = messages.filter((m) => m.seq > sinceSeq && !m.is_me);
+	if (fresh.length === 0) return null;
+	if (fresh.length === 1) {
+		const m = fresh[0] as ChatMessage;
+		return `New message from ${m.name}: ${m.body}`;
+	}
+	return `${fresh.length} new messages.`;
 }
 
 const isStr = (v: unknown): v is string => typeof v === "string";
 
-function isChatMessage(v: unknown): v is ChatMessage {
+export function isChatMessage(v: unknown): v is ChatMessage {
 	if (!v || typeof v !== "object") return false;
 	const m = v as Record<string, unknown>;
 	return (
@@ -97,6 +122,9 @@ function isChatMessage(v: unknown): v is ChatMessage {
 		isStr(m.user_id) &&
 		isStr(m.name) &&
 		isStr(m.body) &&
+		typeof m.seq === "number" &&
+		Number.isSafeInteger(m.seq) &&
+		m.seq >= 0 &&
 		isStr(m.created_at) &&
 		typeof m.is_me === "boolean"
 	);
@@ -149,12 +177,36 @@ export function chatErrorMessage(err: unknown): string {
 }
 
 export const POLL_MS = 5000;
+/** If the socket hasn't opened by now, load the history over HTTP anyway. */
+export const FIRST_LOAD_FALLBACK_MS = 1500;
+
+/** Socket close codes the API uses (see apps/api chat room). */
+export const CLOSE_REMOVED = 4001;
+export const CLOSE_TOO_MANY = 4002;
+/** Policy violation: the client sent a frame on the receive-only socket. */
+export const CLOSE_POLICY = 1008;
+
+/**
+ * What to do when the socket closes:
+ * - "removed": we were removed from the room; check access over HTTP now, and
+ *   stop for good if that 403s/404s.
+ * - "poll": the server won't take this socket (too many connections, or a
+ *   policy close); stop reconnecting and poll instead.
+ * - "reconnect": anything else; poll meanwhile and reconnect with backoff.
+ */
+export type CloseAction = "removed" | "poll" | "reconnect";
+export function closeAction(code: number): CloseAction {
+	if (code === CLOSE_REMOVED) return "removed";
+	if (code === CLOSE_TOO_MANY || code === CLOSE_POLICY) return "poll";
+	return "reconnect";
+}
 
 // ---------------------------------------------------------------------------
 // The hook.
 // ---------------------------------------------------------------------------
 
-export type ChatConnection = "connecting" | "live" | "polling";
+/** "closed": access was lost (401/403/404); nothing more will load. */
+export type ChatConnection = "connecting" | "live" | "polling" | "closed";
 
 export interface UseChat {
 	messages: ChatMessage[];
@@ -172,6 +224,8 @@ export interface UseChat {
 }
 
 const PAGE = 50;
+const isAccessError = (err: unknown) =>
+	err instanceof ApiError && [401, 403, 404].includes(err.status);
 
 export function useChat(kind: RoomKind, id: string): UseChat {
 	const [state, setState] = useState<ChatState>(EMPTY_CHAT);
@@ -183,6 +237,7 @@ export function useChat(kind: RoomKind, id: string): UseChat {
 	const stateRef = useRef(state);
 	/** The room the state belongs to; a late reply for a previous room is dropped. */
 	const roomRef = useRef(`${kind}:${id}`);
+	const olderBusy = useRef(false);
 
 	// The ref is the source of truth so a cursor read straight after a merge is current.
 	const update = useCallback((fn: (s: ChatState) => ChatState) => {
@@ -197,28 +252,50 @@ export function useChat(kind: RoomKind, id: string): UseChat {
 		let socket: WebSocket | null = null;
 		let pollTimer: ReturnType<typeof setInterval> | undefined;
 		let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+		let firstLoadTimer: ReturnType<typeof setTimeout> | undefined;
 		let attempt = 0;
-		/** Set on 401/403/404: stop polling and reconnecting. */
+		/** Set on 401/403/404: stop polling and reconnecting for good. */
 		let dead = false;
+		/** Set on 4002 / 1008: the server won't take a socket; poll only. */
+		let socketRefused = false;
+		let loadedOnce = false;
+		/** The catch-up in flight, so callers join it instead of stacking requests. */
+		let inFlight: Promise<void> | null = null;
+		/** Someone asked for a catch-up while one was running: run once more after it. */
+		let again = false;
 
 		roomRef.current = `${kind}:${id}`;
 		stateRef.current = EMPTY_CHAT;
+		olderBusy.current = false;
 		setState(EMPTY_CHAT);
 		setLoaded(false);
 		setError(null);
+		setHasOlder(false);
 		setConnection("connecting");
+
+		const stopPolling = () => {
+			if (pollTimer) clearInterval(pollTimer);
+			pollTimer = undefined;
+		};
+		const closeSocket = () => {
+			if (!socket) return;
+			const s = socket;
+			socket = null;
+			s.close(1000, "leaving");
+		};
 
 		/**
 		 * Fetch what's newer than what we have (or the latest page on first
 		 * load). Drains up to a few pages so a long absence catches up fully.
 		 */
-		const catchUp = async () => {
+		const fetchNew = async () => {
 			try {
 				for (let n = 0; n < 10 && !stopped; n++) {
 					const after = pollCursor(stateRef.current);
 					const page = await api.messages(kind, id, after ? { after } : {});
 					if (stopped) return;
 					update((s) => mergeMessages(s, page.messages));
+					loadedOnce = true;
 					setLoaded(true);
 					if (!after) {
 						setHasOlder(page.has_more ?? page.messages.length >= PAGE);
@@ -228,92 +305,136 @@ export function useChat(kind: RoomKind, id: string): UseChat {
 				}
 			} catch (err) {
 				if (stopped) return;
+				loadedOnce = true;
 				setLoaded(true);
-				// A poll that fails quietly retries; a 401/403/404 is worth saying.
-				if (err instanceof ApiError && [401, 403, 404].includes(err.status)) {
+				// A poll that fails quietly retries; losing access is worth saying.
+				if (isAccessError(err)) {
 					dead = true;
 					stopPolling();
+					if (reconnectTimer) clearTimeout(reconnectTimer);
+					closeSocket();
+					setConnection("closed");
 					setError(chatErrorMessage(err));
 				}
 			}
 		};
 
+		const catchUp = (): Promise<void> => {
+			if (stopped || dead) return Promise.resolve();
+			if (inFlight) {
+				again = true;
+				return inFlight;
+			}
+			const run = async () => {
+				try {
+					do {
+						again = false;
+						await fetchNew();
+					} while (again && !stopped && !dead);
+				} finally {
+					inFlight = null;
+				}
+			};
+			inFlight = run();
+			return inFlight;
+		};
+
 		const startPolling = () => {
-			if (pollTimer || dead) return;
+			if (pollTimer || dead || stopped) return;
+			setConnection("polling");
 			pollTimer = setInterval(() => {
-				if (document.visibilityState !== "hidden") void catchUp();
+				// Skip a tick rather than queue behind a slow request.
+				if (!inFlight && document.visibilityState !== "hidden") void catchUp();
 			}, POLL_MS);
 		};
-		const stopPolling = () => {
-			if (pollTimer) clearInterval(pollTimer);
-			pollTimer = undefined;
+
+		const scheduleReconnect = () => {
+			if (stopped || dead || socketRefused) return;
+			reconnectTimer = setTimeout(connect, backoffDelay(attempt++, Math.random()));
 		};
 
 		const connect = () => {
-			if (stopped || dead) return;
-			if (typeof WebSocket === "undefined") {
-				startPolling();
-				return;
-			}
+			reconnectTimer = undefined;
+			if (stopped || dead || socketRefused) return;
 			let ws: WebSocket;
 			try {
 				ws = new WebSocket(chatSocketUrl(API_BASE, kind, id));
 			} catch {
-				setConnection("polling");
+				void catchUp();
 				startPolling();
 				return;
 			}
 			socket = ws;
 			ws.onopen = () => {
-				if (stopped) return;
+				if (stopped || socket !== ws) return;
 				attempt = 0;
+				if (firstLoadTimer) clearTimeout(firstLoadTimer);
 				setConnection("live");
 				stopPolling();
-				// Anything sent while we were away.
+				// The first load, or anything sent while we were away. Joins (and
+				// then repeats) a fetch already running, so nothing sent between
+				// that fetch and this subscription is missed.
 				void catchUp();
 			};
 			ws.onmessage = (e: MessageEvent) => {
 				const event = parseChatEvent(e.data);
 				if (event) update((s) => applyChatEvent(s, event));
 			};
-			ws.onclose = () => {
+			ws.onclose = (e: CloseEvent) => {
 				if (stopped || socket !== ws) return;
 				socket = null;
 				if (dead) return;
-				setConnection("polling");
+				const action = closeAction(e.code);
+				if (action === "removed") {
+					// Find out now whether we still belong here; stop if not.
+					void catchUp().then(() => {
+						if (stopped || dead) return;
+						startPolling();
+						scheduleReconnect();
+					});
+					return;
+				}
+				if (action === "poll") socketRefused = true;
+				if (!loadedOnce || action === "poll") void catchUp();
 				startPolling();
-				reconnectTimer = setTimeout(connect, backoffDelay(attempt++, Math.random()));
+				scheduleReconnect();
 			};
 			// onclose follows onerror; nothing else to do here.
 			ws.onerror = () => undefined;
 		};
 
-		void catchUp().then(() => {
-			if (!stopped) connect();
-		});
+		if (typeof WebSocket === "undefined") {
+			void catchUp();
+			startPolling();
+		} else {
+			// The socket's onopen does the first load; this covers a socket that
+			// hangs without opening or closing.
+			firstLoadTimer = setTimeout(() => {
+				if (!loadedOnce) void catchUp();
+			}, FIRST_LOAD_FALLBACK_MS);
+			connect();
+		}
 
 		return () => {
 			stopped = true;
 			stopPolling();
 			if (reconnectTimer) clearTimeout(reconnectTimer);
-			if (socket) {
-				const s = socket;
-				socket = null;
-				s.close(1000, "leaving");
-			}
+			if (firstLoadTimer) clearTimeout(firstLoadTimer);
+			closeSocket();
 		};
 	}, [kind, id, update]);
 
 	const send = useCallback(
 		async (body: string) => {
+			const room = `${kind}:${id}`;
 			setError(null);
 			try {
 				const res = await api.sendMessage(kind, id, body);
-				if (res?.message && roomRef.current === `${kind}:${id}`)
+				if (res?.message && roomRef.current === room)
 					update((s) => mergeMessages(s, [res.message]));
 				return true;
 			} catch (err) {
-				setError(chatErrorMessage(err));
+				if (roomRef.current === room) setError(chatErrorMessage(err));
 				return false;
 			}
 		},
@@ -322,15 +443,16 @@ export function useChat(kind: RoomKind, id: string): UseChat {
 
 	const remove = useCallback(
 		async (messageId: string) => {
+			const room = `${kind}:${id}`;
 			setError(null);
 			try {
 				await api.deleteMessage(messageId);
-				update((s) => removeMessage(s, messageId));
+				if (roomRef.current === room) update((s) => removeMessage(s, messageId));
 			} catch (err) {
-				setError(chatErrorMessage(err));
+				if (roomRef.current === room) setError(chatErrorMessage(err));
 			}
 		},
-		[update],
+		[kind, id, update],
 	);
 
 	const hideAuthor = useCallback(
@@ -339,15 +461,20 @@ export function useChat(kind: RoomKind, id: string): UseChat {
 	);
 
 	const loadOlder = useCallback(async () => {
+		const room = `${kind}:${id}`;
+		if (roomRef.current !== room || olderBusy.current) return;
 		const before = olderCursor(stateRef.current);
 		if (!before) return;
+		olderBusy.current = true;
 		try {
 			const page = await api.messages(kind, id, { before });
-			if (roomRef.current !== `${kind}:${id}`) return;
+			if (roomRef.current !== room) return;
 			update((s) => mergeMessages(s, page.messages));
 			setHasOlder(page.has_more ?? page.messages.length >= PAGE);
 		} catch (err) {
-			setError(chatErrorMessage(err));
+			if (roomRef.current === room) setError(chatErrorMessage(err));
+		} finally {
+			if (roomRef.current === room) olderBusy.current = false;
 		}
 	}, [kind, id, update]);
 

@@ -1,8 +1,9 @@
 import { INTEREST_MAX, type GroupDetail, type GroupMember } from "@tagalong/shared";
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, ApiError } from "./api.js";
-import { ChatPanel, linkTo } from "./Dm.js";
-import { navigate } from "./router.js";
+import { ChatPanel } from "./Dm.js";
+import { ErrorCard } from "./ErrorCard.js";
+import { linkTo, navigate } from "./router.js";
 import { ConfirmDialog, PersonActions } from "./SafetyActions.js";
 
 export function eventDate(e: GroupDetail["event"]): string | null {
@@ -75,40 +76,46 @@ export function Group({ id }: { id: string }) {
 	const [group, setGroup] = useState<GroupDetail | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [leaving, setLeaving] = useState(false);
+	/** People blocked from this screen: hidden from the member list and the chat. */
+	const [blocked, setBlocked] = useState<ReadonlySet<string>>(() => new Set());
+	/** The group id the latest request is for; a late reply for another is dropped. */
+	const current = useRef(id);
 
-	const load = useCallback(
-		() =>
-			api
-				.group(id)
-				.then(setGroup, (err: unknown) =>
-					setError(
-						err instanceof ApiError && err.status === 404
-							? "This group isn't available. You may have left it, or it no longer exists."
-							: "We can't load this group right now.",
-					),
-				),
-		[id],
-	);
+	const load = useCallback(async () => {
+		try {
+			const g = await api.group(id);
+			if (current.current === id) setGroup(g);
+		} catch (err) {
+			if (current.current !== id) return;
+			setError(
+				err instanceof ApiError && err.status === 404
+					? "This group isn't available. You may have left it, or it no longer exists."
+					: "We can't load this group right now.",
+			);
+		}
+	}, [id]);
 	useEffect(() => {
+		current.current = id;
+		setGroup(null);
+		setError(null);
+		setLeaving(false);
+		setBlocked(new Set());
 		void load();
-	}, [load]);
+		return () => {
+			// Anything still in flight for this id is now stale.
+			if (current.current === id) current.current = "";
+		};
+	}, [id, load]);
 
-	if (error)
-		return (
-			<section className="card">
-				<p className="error">{error}</p>
-				<a href="/connections" onClick={linkTo("/connections")}>
-					← Tagalong
-				</a>
-			</section>
-		);
+	if (error) return <ErrorCard message={error} />;
 	if (!group) return <p className="muted">Loading…</p>;
 
 	const me = group.members.find((m) => m.is_me);
-	const others = group.members.filter((m) => !m.is_me);
+	const others = group.members.filter((m) => !m.is_me && !blocked.has(m.user_id));
 	const date = eventDate(group.event);
-	const dropMember = (uid: string) =>
-		setGroup((g) => (g ? { ...g, members: g.members.filter((m) => m.user_id !== uid) } : g));
+	// Blocking hides that person everywhere on this screen: the list and the chat.
+	const hidePerson = (uid: string) => setBlocked((b) => (b.has(uid) ? b : new Set(b).add(uid)));
+	const shown = others.length + (me ? 1 : 0);
 
 	return (
 		<>
@@ -118,7 +125,7 @@ export function Group({ id }: { id: string }) {
 				<p className="muted">
 					{[date, group.event.city].filter(Boolean).join(" · ")}
 					{" · "}
-					{group.members.length} {group.members.length === 1 ? "person" : "people"} going
+					{shown} {shown === 1 ? "person" : "people"} going
 				</p>
 				{me && <MyInterest groupId={group.group_id} member={me} onSaved={() => void load()} />}
 				<button type="button" onClick={() => setLeaving(true)}>
@@ -141,16 +148,17 @@ export function Group({ id }: { id: string }) {
 								<span className="muted">· {m.city}</span>
 								{m.interest && <p className="tg-interest-text">{m.interest}</p>}
 							</div>
-							<PersonActions userId={m.user_id} name={m.name} onBlocked={dropMember} />
+							<PersonActions userId={m.user_id} name={m.name} onBlocked={hidePerson} />
 						</li>
 					))}
 				</ul>
 				<p className="note">
-					Members only ever see each other's chosen name and city. Meet in public places.
+					Members only ever see each other's chosen name and city, plus what they write here. Meet
+					in public places.
 				</p>
 			</section>
 
-			<ChatPanel kind="group" id={group.group_id} onBlocked={dropMember} />
+			<ChatPanel kind="group" id={group.group_id} hiddenAuthors={blocked} onBlocked={hidePerson} />
 
 			{leaving && (
 				<ConfirmDialog

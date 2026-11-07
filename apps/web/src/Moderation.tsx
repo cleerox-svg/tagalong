@@ -1,6 +1,7 @@
 import type { ModAction, ModReport, ReportReason } from "@tagalong/shared";
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "./api.js";
+import { ErrorCard } from "./ErrorCard.js";
 import { ConfirmDialog } from "./SafetyActions.js";
 
 const REASON: Record<ReportReason, string> = {
@@ -13,6 +14,12 @@ const REASON: Record<ReportReason, string> = {
 
 const when = (iso: string) =>
 	new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+const DONE: Record<ModAction, string> = {
+	dismiss: "Report dismissed.",
+	remove_message: "Message removed.",
+	suspend_user: "User suspended.",
+};
 
 const errText = (err: unknown) =>
 	err instanceof ApiError ? err.message : "That didn't go through. Try again.";
@@ -138,7 +145,7 @@ export function Moderation() {
 		setNotice(null);
 		try {
 			await api.modResolve(r.id, action);
-			setNotice("Done.");
+			setNotice(DONE[action]);
 			await load();
 		} catch (err) {
 			setNotice(errText(err));
@@ -147,7 +154,7 @@ export function Moderation() {
 		}
 	};
 
-	if (error) return <p className="error">{error}</p>;
+	if (error) return <ErrorCard message={error} to="/" label="Budgetrip" />;
 	if (!reports) return <p className="muted">Loading…</p>;
 
 	return (
@@ -176,7 +183,7 @@ export function Moderation() {
 							setNotice(null);
 							try {
 								await api.modTrust(uid);
-								setNotice("User marked as trusted.");
+								setNotice("User trusted.");
 							} catch (err) {
 								setNotice(errText(err));
 							} finally {
@@ -194,7 +201,7 @@ export function Moderation() {
 					onClose={() => setSuspend(null)}
 					onConfirm={async () => {
 						await api.modResolve(suspend.id, "suspend_user");
-						setNotice("User suspended.");
+						setNotice(DONE.suspend_user);
 						await load();
 					}}
 				>

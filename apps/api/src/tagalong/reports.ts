@@ -17,10 +17,11 @@ import type {
 	RoomKind,
 	MessageDeletedBy,
 } from "@tagalong/shared";
-import { kick } from "../chat/notify.js";
+import type { Defer } from "../chat/notify.js";
 import { HttpError, newId, nowIso } from "../lib/http.js";
-import { shareAGroup } from "./access.js";
-import { broadcastDeleted } from "./messages.js";
+import { loadConnectionByPair, shareAGroup } from "./access.js";
+import { leaveTagalong } from "./leave.js";
+import { broadcastDeleted, type DeletedRoom } from "./messages.js";
 
 async function canSeeMessage(db: D1Database, messageId: string, me: string) {
 	return db
@@ -33,15 +34,6 @@ async function canSeeMessage(db: D1Database, messageId: string, me: string) {
 		)
 		.bind(messageId, me, me, me)
 		.first<{ user_id: string }>();
-}
-
-async function haveConnection(db: D1Database, a: string, b: string) {
-	const [lo, hi] = a < b ? [a, b] : [b, a];
-	const row = await db
-		.prepare("SELECT 1 AS x FROM connections WHERE user_lo = ? AND user_hi = ?")
-		.bind(lo, hi)
-		.first();
-	return row !== null;
 }
 
 /**
@@ -58,7 +50,7 @@ export async function createReport(db: D1Database, me: string, input: ReportInpu
 		if (input.target_id === me) throw new HttpError(400, "invalid", "You can't report yourself.");
 		const visible =
 			(await shareAGroup(db, me, input.target_id)) ||
-			(await haveConnection(db, me, input.target_id));
+			(await loadConnectionByPair(db, me, input.target_id)) !== null;
 		if (!visible) throw new HttpError(404, "not_found", "No such user.");
 	}
 	const res = await db
@@ -179,10 +171,13 @@ export async function loadReport(db: D1Database, id: string): Promise<ModReport 
 
 /**
  * Applies a moderator's decision. Removing a message or suspending a user also
- * resolves every other open report about the same target.
+ * resolves every other open report about the same target; a suspension also
+ * resolves the open reports about that user's messages. A message already
+ * deleted by its author keeps deleted_by = 'author' and its deleted_at.
  */
 export async function resolveReport(
 	env: Env,
+	defer: Defer,
 	reportId: string,
 	moderatorId: string,
 	action: ModAction,
@@ -208,8 +203,9 @@ export async function resolveReport(
 		const [removed] = await db.batch([
 			db
 				.prepare(
-					`UPDATE messages SET deleted_at = COALESCE(deleted_at, ?), deleted_by = 'moderator'
-					 WHERE id = ? RETURNING group_id, connection_id`,
+					`UPDATE messages SET deleted_at = COALESCE(deleted_at, ?),
+					   deleted_by = COALESCE(deleted_by, 'moderator')
+					 WHERE id = ? RETURNING group_id, connection_id, user_id`,
 				)
 				.bind(now, report.target_id),
 			db
@@ -219,14 +215,12 @@ export async function resolveReport(
 				)
 				.bind(now, moderatorId, report.target_id),
 		]);
-		const room = (
-			removed?.results as { group_id: string | null; connection_id: string | null }[]
-		)[0];
-		if (room) await broadcastDeleted(env, report.target_id, room);
+		const room = (removed?.results as DeletedRoom[] | undefined)?.[0];
+		if (room) defer(broadcastDeleted(env, report.target_id, room));
 	} else {
 		const userId = report.target_user?.user_id;
 		if (!userId) throw new HttpError(400, "invalid_action", "There is no user to suspend.");
-		await suspendUser(env, userId, now, [
+		await suspendUser(env, defer, userId, now, [
 			db
 				.prepare(
 					`UPDATE reports SET resolved_at = ?, resolved_by = ?, resolution = 'user_suspended'
@@ -237,6 +231,14 @@ export async function resolveReport(
 				.prepare(
 					`UPDATE reports SET resolved_at = ?, resolved_by = ?, resolution = 'user_suspended'
 					 WHERE target_type = 'user' AND target_id = ? AND resolved_at IS NULL`,
+				)
+				.bind(now, moderatorId, userId),
+			// Open reports about any of the user's messages are settled by the suspension too.
+			db
+				.prepare(
+					`UPDATE reports SET resolved_at = ?, resolved_by = ?, resolution = 'user_suspended'
+					 WHERE target_type = 'message' AND resolved_at IS NULL
+					   AND target_id IN (SELECT id FROM messages WHERE user_id = ?)`,
 				)
 				.bind(now, moderatorId, userId),
 		]);
@@ -253,46 +255,21 @@ export async function resolveReport(
  */
 export async function suspendUser(
 	env: Env,
+	defer: Defer,
 	userId: string,
 	now: string,
 	extra: D1PreparedStatement[] = [],
 ) {
-	const db = env.DB;
-	const [, groups, conns] = await db.batch([
-		db
-			.prepare(
-				"UPDATE users SET tagalong_suspended_at = COALESCE(tagalong_suspended_at, ?) WHERE id = ?",
-			)
-			.bind(now, userId),
-		db.prepare("DELETE FROM group_members WHERE user_id = ? RETURNING group_id").bind(userId),
-		db
-			.prepare(
-				`UPDATE connections SET status = 'closed', responded_at = ?
-				 WHERE (user_lo = ? OR user_hi = ?) AND status IN ('pending', 'accepted')
-				 RETURNING id, user_lo, user_hi`,
-			)
-			.bind(now, userId, userId),
-		...extra,
-	]);
-	await kickFromRooms(
+	await leaveTagalong(
 		env,
+		defer,
 		userId,
-		(groups?.results ?? []) as { group_id: string }[],
-		(conns?.results ?? []) as { id: string; user_lo: string; user_hi: string }[],
+		now,
+		env.DB.prepare(
+			"UPDATE users SET tagalong_suspended_at = COALESCE(tagalong_suspended_at, ?) WHERE id = ?",
+		).bind(now, userId),
+		extra,
 	);
-}
-
-/** Closes a user's sockets in the groups they left and both sides' sockets in closed DMs. */
-export async function kickFromRooms(
-	env: Env,
-	userId: string,
-	groups: { group_id: string }[],
-	conns: { id: string; user_lo: string; user_hi: string }[],
-) {
-	await Promise.all([
-		...groups.map((g) => kick(env, "group", g.group_id, [userId])),
-		...conns.map((c) => kick(env, "dm", c.id, [c.user_lo, c.user_hi])),
-	]);
 }
 
 export async function trustUser(db: D1Database, userId: string) {

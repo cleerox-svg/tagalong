@@ -3,25 +3,22 @@
  */
 import { Hono } from "hono";
 import { TagalongOptInSchema, type SharedGroup, type TagalongProfile } from "@tagalong/shared";
-import { requireAdult, requireUser } from "../auth/session.js";
+import { deferOf } from "../chat/notify.js";
 import { HttpError, nowIso, readJson } from "../lib/http.js";
-import { requireTrustedWrite } from "../lib/security.js";
 import {
+	adult,
 	isActiveTagalongUser,
 	isBlockedEitherWay,
+	loadConnectionByPair,
 	loadTagalongRow,
-	requireTagalong,
+	member,
 	tagalongStatus,
-	type ConnectionRow,
 	type TgEnv,
 } from "../tagalong/access.js";
+import { leaveTagalong } from "../tagalong/leave.js";
 import { limitOptIn } from "../tagalong/limits.js";
-import { kickFromRooms } from "../tagalong/reports.js";
 
 export const tagalong = new Hono<TgEnv>();
-
-const adult = [requireTrustedWrite, requireUser, requireAdult] as const;
-const member = [...adult, requireTagalong] as const;
 
 /**
  * Turn Tagalong on, or change the shown name/city. The client supplies both
@@ -62,21 +59,12 @@ tagalong.post("/tagalong/opt-in", ...adult, async (c) => {
  */
 tagalong.post("/tagalong/opt-out", ...adult, async (c) => {
 	const userId = c.get("userId");
-	const now = nowIso();
-	const [, groups, conns] = await c.env.DB.batch([
-		c.env.DB.prepare("UPDATE users SET tagalong_opt_in_at = NULL WHERE id = ?").bind(userId),
-		c.env.DB.prepare("DELETE FROM group_members WHERE user_id = ? RETURNING group_id").bind(userId),
-		c.env.DB.prepare(
-			`UPDATE connections SET status = 'closed', responded_at = ?
-			 WHERE (user_lo = ? OR user_hi = ?) AND status IN ('pending', 'accepted')
-			 RETURNING id, user_lo, user_hi`,
-		).bind(now, userId, userId),
-	]);
-	await kickFromRooms(
+	await leaveTagalong(
 		c.env,
+		deferOf(c),
 		userId,
-		(groups?.results ?? []) as { group_id: string }[],
-		(conns?.results ?? []) as { id: string; user_lo: string; user_hi: string }[],
+		nowIso(),
+		c.env.DB.prepare("UPDATE users SET tagalong_opt_in_at = NULL WHERE id = ?").bind(userId),
 	);
 	const row = await loadTagalongRow(c.env.DB, userId);
 	if (!row) throw new HttpError(401, "signed_out", "Sign in first.");
@@ -108,16 +96,7 @@ tagalong.get("/tagalong/users/:id", ...member, async (c) => {
 	const notFound = () => new HttpError(404, "not_found", "No such person.");
 	const isMe = target === me;
 
-	const [lo, hi] = me < target ? [me, target] : [target, me];
-	const conn = isMe
-		? null
-		: await db
-				.prepare(
-					`SELECT id, user_lo, user_hi, requested_by, status, created_at, responded_at
-					 FROM connections WHERE user_lo = ? AND user_hi = ?`,
-				)
-				.bind(lo, hi)
-				.first<ConnectionRow>();
+	const conn = isMe ? null : await loadConnectionByPair(db, me, target);
 	const { results: shared } = await db
 		.prepare(
 			`SELECT g.id AS group_id, e.name AS event_name, e.starts_at

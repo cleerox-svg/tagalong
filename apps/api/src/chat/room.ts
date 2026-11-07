@@ -7,12 +7,13 @@
  *
  * The Worker is the only caller. It authenticates the socket, checks access
  * and forwards the upgrade with X-Tg-User; a Durable Object is not reachable
- * from the internet. Sockets are receive-only: client messages are ignored,
- * apart from the "ping" -> "pong" auto-response, which does not wake the
- * object (hibernation API).
+ * from the internet. Sockets are receive-only: "ping" gets "pong" through the
+ * hibernation auto-response (the object is not woken); any other client
+ * frame closes the socket with 1008.
  */
 import { DurableObject } from "cloudflare:workers";
 import type { ChatEvent } from "@tagalong/shared";
+import type { Audience } from "./notify.js";
 
 /** Close code sent when the server removes a user (left, blocked, suspended…). */
 export const KICK_CLOSE_CODE = 4001;
@@ -43,8 +44,10 @@ export class ChatRoom extends DurableObject<Env> {
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
-	/** Receive-only: anything a client sends (other than "ping") is ignored. */
-	override async webSocketMessage(): Promise<void> {}
+	/** Receive-only: any client frame other than the auto-answered "ping" is a policy violation. */
+	override async webSocketMessage(ws: WebSocket): Promise<void> {
+		safeClose(ws, 1008, "Receive-only");
+	}
 
 	override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
 		safeClose(ws, code === 1005 || code === 1006 ? 1000 : code, reason);
@@ -55,16 +58,24 @@ export class ChatRoom extends DurableObject<Env> {
 	}
 
 	/**
-	 * Sends `event` to every socket except those of `excludeUserIds` (the
-	 * Worker passes everyone in a block relation with the sender). A message's
+	 * Sends `event` to the sockets of users in `audience.allow` and not in
+	 * `audience.skip`. The Worker computes the audience from D1 at send time
+	 * (current eligible members, minus block relations with the author); any
+	 * socket whose user is no longer allowed here is closed with
+	 * KICK_CLOSE_CODE, so a missed kick heals on the next event. A message's
 	 * `is_me` is set per recipient. Returns how many sockets it reached.
 	 */
-	async broadcast(event: ChatEvent, excludeUserIds: string[]): Promise<number> {
-		const exclude = new Set(excludeUserIds);
+	async broadcast(event: ChatEvent, audience: Audience): Promise<number> {
+		const allow = new Set(audience.allow);
+		const skip = new Set(audience.skip);
 		let sent = 0;
 		for (const ws of this.ctx.getWebSockets()) {
 			const userId = this.ctx.getTags(ws)[0];
-			if (!userId || exclude.has(userId)) continue;
+			if (!userId || !allow.has(userId)) {
+				safeClose(ws, KICK_CLOSE_CODE, "Removed");
+				continue;
+			}
+			if (skip.has(userId)) continue;
 			const payload: ChatEvent =
 				event.type === "message"
 					? {
