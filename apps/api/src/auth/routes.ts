@@ -4,6 +4,12 @@ import { isCurrencyCode } from "@tagalong/shared";
 import { z } from "zod";
 import { HttpError, newId, nowIso, readJson, type AppEnv } from "../lib/http.js";
 import { ALLOWED_ORIGINS, requireTrustedWrite } from "../lib/security.js";
+import {
+	isModerator,
+	TAGALONG_COLUMNS,
+	tagalongStatus,
+	type TagalongRow,
+} from "../tagalong/access.js";
 import { endSession, requireUser, startSession } from "./session.js";
 
 const OAUTH_COOKIE = "tg_oauth";
@@ -140,20 +146,34 @@ auth.post("/auth/logout", requireTrustedWrite, (c) => {
 
 auth.get("/me", requireUser, async (c) => {
 	const me = await c.env.DB.prepare(
-		`SELECT id, email, display_name, home_city, home_currency, birthdate_verified_18
+		`SELECT id, email, display_name, home_city, home_currency, birthdate_verified_18,
+		   ${TAGALONG_COLUMNS}
 		 FROM users WHERE id = ?`,
 	)
 		.bind(c.get("userId"))
-		.first<{
-			id: string;
-			email: string;
-			display_name: string;
-			home_city: string | null;
-			home_currency: string | null;
-			birthdate_verified_18: number;
-		}>();
+		.first<
+			{
+				id: string;
+				email: string;
+				display_name: string;
+				home_city: string | null;
+				home_currency: string | null;
+				birthdate_verified_18: number;
+			} & TagalongRow
+		>();
 	if (!me) throw new HttpError(401, "signed_out", "Sign in first.");
-	return c.json({ ...me, birthdate_verified_18: me.birthdate_verified_18 === 1 });
+	// The user's own account: email and home city are theirs to see. Tagalong
+	// shows others only the name and city in `tagalong`.
+	return c.json({
+		id: me.id,
+		email: me.email,
+		display_name: me.display_name,
+		home_city: me.home_city,
+		home_currency: me.home_currency,
+		birthdate_verified_18: me.birthdate_verified_18 === 1,
+		tagalong: tagalongStatus(me),
+		is_moderator: isModerator(c.env, me.id),
+	});
 });
 
 const Onboarding = z.object({

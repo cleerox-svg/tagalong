@@ -101,7 +101,7 @@ trips.get("/trips", ...signedIn, async (c) => {
 	const { results } = await c.env.DB.prepare(
 		`SELECT s.latest_plan_id AS plan_id, s.alerts_enabled, s.best_total_minor, s.currency, s.last_checked_at,
 		   s.created_at AS saved_at, t.event_query, t.origin_city, t.party_size, t.budget_minor, t.budget_scope,
-		   e.name AS event_name, e.local_date, e.venue_name, e.city AS event_city, p.status
+		   p.event_id, e.name AS event_name, e.local_date, e.venue_name, e.city AS event_city, p.status
 		 FROM saved_trips s
 		 JOIN trip_requests t ON t.id = s.trip_request_id
 		 JOIN plans p ON p.id = s.latest_plan_id AND p.user_id = s.user_id
