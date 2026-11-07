@@ -10,6 +10,48 @@ an ISO 4217 currency, and the budget filter and ranking live in
 Read the actual files before changing anything. These are the rules that are
 easy to break by accident.
 
+## How work is done: the main session orchestrates, sub-agents build
+
+Standing rule for every session (owner's instruction). The main session is the
+**orchestrator**: it never writes product code, tests, docs, plans or designs
+itself. It delegates each piece to the roster agent in `.claude/agents/` whose
+charter fits, briefs it fully (an agent sees only its brief: goal, spec phase,
+files, rules, acceptance check), and integrates the results. It may itself run
+read-only commands, git, push, open and merge PRs, and answer questions.
+
+**Default pipeline** for any change to product source:
+
+1. **Plan**: `delivery-lead` (skip only for a single obvious task).
+2. **Build**: `backend-engineer` / `frontend-engineer` / `domain-engineer`.
+3. **Test**: `test-engineer`.
+4. **Verify**: `qa-verifier` (full CI gate + end-to-end where feasible).
+5. **Review**, in parallel: `code-reviewer` always; `security-reviewer` for
+   auth, sessions, user data, secrets or providers; `pricing-integrity-reviewer`
+   for anything touching prices, money, FX, ranking or AI parsing;
+   `design-reviewer` for UI. CRITICAL/HIGH findings, and MEDIUM correctness or
+   security ones, go back to the owning builder, then re-verify.
+6. **Ship**: the orchestrator commits, pushes and opens the PR.
+
+Independent work (disjoint files) runs in parallel; dependent work runs as a
+pipeline. Sub-agents never push, open or merge PRs, or change merge rules.
+Still one spec phase per session.
+
+| Agent                        | Use it for                                                       |
+| ---------------------------- | ---------------------------------------------------------------- |
+| `delivery-lead`              | Ordered plan against §9, owners, dependencies, risks (read-only) |
+| `backend-engineer`           | `apps/api`: routes, auth, D1, providers, planning, migrations    |
+| `frontend-engineer`          | `apps/web`: the React PWA                                        |
+| `domain-engineer`            | `packages/shared`: money, types, estimates, candidates, ranking  |
+| `test-engineer`              | vitest coverage; never changes product code                      |
+| `qa-verifier`                | Full gate + Playwright run, with evidence; no product code       |
+| `code-reviewer`              | Correctness, reuse, simplification (read-only)                   |
+| `security-reviewer`          | Auth, CORS/CSRF, secrets, scoping, SSRF, prompt injection        |
+| `pricing-integrity-reviewer` | No AI prices, minor units + currency, ranking in shared          |
+| `design-reviewer`            | UX, price clarity, a11y, phone width                             |
+
+Trivial edits (a typo, a comment) and pure questions may skip the pipeline;
+when unsure, it isn't trivial.
+
 ## Stack
 
 pnpm workspaces + Turborepo · Cloudflare Worker (Hono) in `apps/api` · Vite +
