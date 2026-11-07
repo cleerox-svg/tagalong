@@ -122,6 +122,28 @@ pnpm db:migrate:local
 pnpm dev     # API on :8787, web app on :5173
 ```
 
+## 1e. Tagalong moderators (phase 5)
+
+The Tagalong moderation queue (open reports, removing messages, suspending and
+trusting users) is open only to the users listed in `MODERATOR_USER_IDS` in
+`apps/api/wrangler.jsonc`: a comma-separated list of user UUIDs (the `id`
+column of `users`, not emails). It is configuration, not a secret, so change it
+in a PR:
+
+```jsonc
+"MODERATOR_USER_IDS": "6f1c2e9a-…-0001,b27d…-0002",
+```
+
+To find someone's id, have them sign in once, then look them up by email in
+`users` (Cloudflare dashboard → D1 → `tagalong-db` → Console). Empty (the
+default) means nobody can open the queue: every moderation request answers 403.
+It fails closed. Reports are still recorded and wait in the queue.
+
+The chat fan-out runs in a Durable Object, `ChatRoom` (binding `CHAT_ROOM`). No
+setup is needed: the first deploy that includes it creates the class from the
+`v1` entry under `migrations` in `apps/api/wrangler.jsonc`. That list is
+append-only, like `/migrations`: never edit or remove a tag.
+
 ## 2. GitHub repository secrets
 
 Settings → Secrets and variables → Actions → **Secrets**:
