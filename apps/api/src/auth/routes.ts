@@ -43,12 +43,20 @@ const redirectUri = (url: string) => `${new URL(url).origin}/auth/google/callbac
  */
 type OAuthState = { state: string; returnTo: string; native?: true; codeChallenge?: string };
 
+/**
+ * Native flows' `state` starts with this, so a callback whose tg_oauth cookie
+ * was lost or expired still ends on NATIVE_CALLBACK (with error=bad_state)
+ * instead of a JSON page the app never sees. Web states are bare UUIDs.
+ */
+const NATIVE_STATE_PREFIX = "n.";
+
 auth.get("/auth/google/start", async (c) => {
 	if (!c.env.GOOGLE_CLIENT_ID)
 		throw new HttpError(500, "misconfigured", "Sign-in is not configured.");
-	const state = newId();
+	const isNative = c.req.query("native") === "1";
+	const state = isNative ? `${NATIVE_STATE_PREFIX}${newId()}` : newId();
 	const saved: OAuthState = { state, returnTo: safeReturn(c.req.query("return_to")) };
-	if (c.req.query("native") === "1") {
+	if (isNative) {
 		const challenge = c.req.query("code_challenge") ?? "";
 		if (!CODE_CHALLENGE_RE.test(challenge))
 			return c.redirect(nativeRedirect({ error: "bad_request" }), 302);
@@ -94,8 +102,11 @@ function decodeJwtPayload(jwt: string): unknown {
 	return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0))));
 }
 
-/** Swaps Google's code for a verified identity and upserts the user. Returns our user id. */
-async function googleUser(c: Context<AppEnv>, code: string): Promise<string> {
+/** Swaps Google's code for a verified identity and upserts the user. Returns our user id and email. */
+async function googleUser(
+	c: Context<AppEnv>,
+	code: string,
+): Promise<{ id: string; email: string }> {
 	const tokenRes = await fetch(GOOGLE_TOKEN, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -136,7 +147,52 @@ async function googleUser(c: Context<AppEnv>, code: string): Promise<string> {
 		.bind(newId(), sub, email, (name ?? email.split("@")[0] ?? "Traveller").slice(0, 80))
 		.first<{ id: string }>();
 	if (!user) throw new HttpError(500, "internal", "Could not save your account.");
-	return user.id;
+	return { id: user.id, email };
+}
+
+const escapeHtml = (s: string) =>
+	s.replace(
+		/[&<>"']/g,
+		(ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] ?? ch,
+	);
+
+/**
+ * Interim (security review M1): any installed app can register the custom
+ * scheme, so a successful native sign-in first shows who signed in and asks
+ * the user to tap through, instead of redirecting silently. The link is always
+ * nativeRedirect (the fixed NATIVE_CALLBACK); nothing from the request is in
+ * it. Before store release NATIVE_CALLBACK becomes a verified HTTPS App Link /
+ * Universal Link (docs/SETUP.md, "Mobile sign-in").
+ */
+function nativeInterstitial(c: Context<AppEnv>, email: string, appCode: string): Response {
+	const href = escapeHtml(nativeRedirect({ code: appCode }));
+	const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Return to Budgetrip</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;line-height:1.5;color:#111}
+a.button{display:inline-block;padding:.75rem 1.25rem;border-radius:.5rem;background:#0b5fff;color:#fff;text-decoration:none;font-weight:600}
+p.note{color:#555;font-size:.9rem}
+</style>
+</head>
+<body>
+<h1>Signed in as ${escapeHtml(email)}</h1>
+<p><a class="button" href="${href}">Return to Budgetrip</a></p>
+<p class="note">If you didn't start signing in to the Budgetrip app, close this page.</p>
+</body>
+</html>
+`;
+	return c.html(html, 200, {
+		"Content-Security-Policy":
+			"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+		"Cache-Control": "no-store",
+		"Referrer-Policy": "no-referrer",
+		"X-Frame-Options": "DENY",
+		"X-Content-Type-Options": "nosniff",
+	});
 }
 
 auth.get("/auth/google/callback", async (c) => {
@@ -154,9 +210,9 @@ auth.get("/auth/google/callback", async (c) => {
 			return c.redirect(nativeRedirect({ error: "bad_state" }), 302);
 		if (!code) return c.redirect(nativeRedirect({ error: "cancelled" }), 302);
 		try {
-			const userId = await googleUser(c, code);
-			const appCode = await issueNativeCode(c.env.DB, userId, challenge);
-			return c.redirect(nativeRedirect({ code: appCode }), 302);
+			const user = await googleUser(c, code);
+			const appCode = await issueNativeCode(c.env.DB, user.id, challenge);
+			return nativeInterstitial(c, user.email, appCode);
 		} catch (err) {
 			if (!(err instanceof HttpError)) console.error("native sign-in failed", err);
 			const error = err instanceof HttpError ? err.code : "internal";
@@ -164,11 +220,14 @@ auth.get("/auth/google/callback", async (c) => {
 		}
 	}
 
+	// A native flow whose cookie was lost: back to the app (fixed URL), not JSON.
+	if (!saved?.native && state?.startsWith(NATIVE_STATE_PREFIX))
+		return c.redirect(nativeRedirect({ error: "bad_state" }), 302);
 	if (!saved || !state || state !== saved.state) {
 		throw new HttpError(400, "bad_state", "Sign-in expired or was started elsewhere. Try again.");
 	}
 	if (!code) return c.redirect(saved.returnTo, 302); // the user cancelled at Google
-	await startSession(c, await googleUser(c, code));
+	await startSession(c, (await googleUser(c, code)).id);
 	return c.redirect(saved.returnTo, 302);
 });
 

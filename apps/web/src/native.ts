@@ -517,23 +517,46 @@ function askedBefore(): boolean {
 	}
 }
 
+function rememberAsked(): void {
+	try {
+		globalThis.localStorage?.setItem(ASKED_KEY, "1");
+	} catch {
+		// Not remembering only means we may offer again; the OS still won't re-prompt.
+	}
+}
+
 /**
- * Ask for push permission in context: after a DM, a connection request or
- * acceptance, or saving a trip / turning on a price alert. Asks at most once,
- * only inside the app, and only while the OS hasn't been asked yet.
- * Fire-and-forget; never throws.
+ * Whether to offer push in context (after a DM, a connection request or
+ * acceptance, saving a trip or turning on a price alert): only inside the
+ * app, only while the OS hasn't been asked, and only if the in-app offer
+ * wasn't answered before. The caller shows its own explainer first and calls
+ * `askForPushInContext` or `declinePushInContext`. Never throws.
  */
-export function askForPushInContext(): void {
-	if (!isNative() || askedBefore()) return;
-	void (async () => {
-		if ((await pushPermission()) !== "prompt") return;
-		try {
-			globalThis.localStorage?.setItem(ASKED_KEY, "1");
-		} catch {
-			// Not remembering only means we may ask again; the OS still won't re-prompt.
-		}
-		await enablePush();
-	})().catch(() => undefined);
+export async function shouldOfferPush(): Promise<boolean> {
+	if (!isNative() || askedBefore()) return false;
+	try {
+		return (await pushPermission()) === "prompt";
+	} catch {
+		return false;
+	}
+}
+
+/** "Not now" on the in-app offer: don't offer again. */
+export function declinePushInContext(): void {
+	if (isNative()) rememberAsked();
+}
+
+/**
+ * "Turn on" on the in-app offer: show the system dialog (if the OS still
+ * hasn't been asked) and register this device. Remembers the offer was
+ * answered once the system dialog has had its say; a failure before that
+ * leaves it to be offered again. Never throws.
+ */
+export async function askForPushInContext(): Promise<PushOutcome> {
+	if (!isNative()) return "unsupported";
+	const outcome = await enablePush().catch((): PushOutcome => "failed");
+	if (outcome !== "failed" && outcome !== "unsupported") rememberAsked();
+	return outcome;
 }
 
 /**

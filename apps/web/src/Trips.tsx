@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api, type TripsResponse } from "./api.js";
 import { linkTo } from "./router.js";
 import { WhoElse } from "./WhoElse.js";
-import { askForPushInContext } from "./native.js";
+import { PushOffer, usePushOffer } from "./PushOffer.js";
 
 const money = (amount_minor: number, currency: string) => formatMoney({ amount_minor, currency });
 const when = (iso: string) =>
@@ -12,6 +12,7 @@ const when = (iso: string) =>
 export function Trips() {
 	const [data, setData] = useState<TripsResponse | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const push = usePushOffer();
 
 	const load = () =>
 		api.trips().then(setData, () => setError("We can't load your trips right now."));
@@ -62,13 +63,18 @@ export function Trips() {
 										const on = e.target.checked;
 										await api
 											.setAlerts(t.plan_id, on)
-											.then(() => on && askForPushInContext())
+											.then(() => on && push.offer(t.plan_id))
 											.catch(() => undefined);
 										void load();
 									}}
 								/>
-								Price-drop emails
+								Price-drop alerts
 							</label>
+							<PushOffer
+								state={push}
+								at={t.plan_id}
+								question="Get a notification on this phone if the price drops?"
+							/>
 						</li>
 					))}
 				</ul>

@@ -720,3 +720,39 @@ a {
 .notif-error:empty {
 	margin: 0;
 }
+
+/* In-context push offer (app only) */
+.push-offer {
+	flex-basis: 100%;
+	min-width: 0;
+}
+.push-offer-text {
+	margin: 8px 0 0;
+}
+.push-offer-text:empty {
+	margin: 0;
+}
+.push-offer.is-open {
+	margin-top: 8px;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--bg);
+}
+.push-offer.is-open .push-offer-text {
+	margin: 0;
+	color: var(--ink);
+}
+.push-offer-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 10px;
+}
+.push-offer-actions button {
+	min-height: 44px;
+}
+.row-inline .alert-hint {
+	flex-basis: 100%;
+	margin: 0;
+}

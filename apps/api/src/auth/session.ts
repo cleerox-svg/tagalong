@@ -28,7 +28,8 @@ export const b64url = (bytes: ArrayBuffer | Uint8Array): string =>
 		.replace(/\//g, "_")
 		.replace(/=+$/, "");
 
-const fromB64url = (s: string): Uint8Array | null => {
+/** base64url (padded or not) to bytes; null if it isn't base64url. */
+export const fromB64url = (s: string): Uint8Array | null => {
 	if (!/^[A-Za-z0-9_-]*$/.test(s)) return null;
 	try {
 		const b64 = s

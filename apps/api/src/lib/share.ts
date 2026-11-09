@@ -1,7 +1,7 @@
-import { ALLOWED_ORIGINS } from "./security.js";
+import { WEB_ORIGINS } from "./security.js";
 
 /** The production web origin, for links in share URLs and emails. */
-export const WEB_ORIGIN = ALLOWED_ORIGINS[0] as string;
+export const WEB_ORIGIN = WEB_ORIGINS[0] as string;
 
 export const SHARE_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 

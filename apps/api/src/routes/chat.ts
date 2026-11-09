@@ -11,10 +11,11 @@
  * The socket is receive-only; sends go through the POST routes.
  *
  * Phase 6: the native app can't use the cookie and can't set headers on a
- * WebSocket, so it first gets a short-lived signed ticket from POST
- * /chat/ticket (bearer-authenticated, same access checks) and opens
- * .../ws?ticket=... from a NATIVE origin. A ticket is bound to user, room kind
- * and id, and lives 60 s. All the checks after authentication still run.
+ * WebSocket, so it first gets a ticket from POST /chat/ticket
+ * (bearer-authenticated, same access checks) and opens .../ws?ticket=... from
+ * a NATIVE origin. A ticket is short-lived (60 s), bound to user and room
+ * (kind and id); it is not single-use, so it may be replayed within those
+ * 60 s for the same room. All the checks after authentication still run.
  */
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
@@ -24,6 +25,7 @@ import {
 	assertUserExists,
 	authenticate,
 	b64url,
+	fromB64url,
 	requireAdult,
 	requireUser,
 	signToken,
@@ -57,9 +59,10 @@ async function ticketUserId(
 ): Promise<string | null> {
 	const payload = await verifyToken(env, TICKET_LABEL, ticket);
 	if (!payload) return null;
+	const bytes = fromB64url(payload);
+	if (!bytes) return null;
 	try {
-		const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
-		const t = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "="))) as Ticket;
+		const t = JSON.parse(new TextDecoder().decode(bytes)) as Ticket;
 		if (typeof t.u !== "string" || t.k !== kind || t.i !== id) return null;
 		if (typeof t.e !== "number" || t.e * 1000 < Date.now()) return null;
 		return t.u;
@@ -118,7 +121,10 @@ const TicketRequest = z.strictObject({
 	id: z.string().min(1).max(200),
 });
 
-/** POST /chat/ticket {kind, id} → {ticket, expires_at}. Same access checks as the socket. */
+/**
+ * POST /chat/ticket {kind, id} → {ticket, expires_at}. Same access checks as
+ * the socket. The ticket is short-lived (60 s), bound to user and room.
+ */
 chat.post(
 	"/chat/ticket",
 	requireTrustedWrite,

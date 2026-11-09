@@ -21,9 +21,6 @@ export const WEB_ORIGINS: readonly string[] = [
  */
 export const NATIVE_ORIGINS: readonly string[] = ["capacitor://localhost", "https://localhost"];
 
-/** @deprecated Web origins only; kept for existing imports. Use WEB_ORIGINS. */
-export const ALLOWED_ORIGINS = WEB_ORIGINS;
-
 const corsBase = {
 	allowMethods: ["GET", "POST", "OPTIONS"],
 	allowHeaders: ["Content-Type", "Authorization"],

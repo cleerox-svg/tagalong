@@ -33,11 +33,7 @@ const challengeOf = async (verifier: string) =>
 const newVerifier = () => b64url(crypto.getRandomValues(new Uint8Array(48)));
 
 /** Runs the native start + callback against a mocked Google; returns the app redirect. */
-async function nativeSignIn(
-	verifier: string,
-	sub = `g-${crypto.randomUUID()}`,
-	extraQuery = "",
-) {
+async function nativeSignIn(verifier: string, sub = `g-${crypto.randomUUID()}`, extraQuery = "") {
 	const start = await call(
 		`/auth/google/start?native=1&code_challenge=${await challengeOf(verifier)}${extraQuery}`,
 	);
@@ -63,6 +59,30 @@ async function nativeSignIn(
 	return res;
 }
 
+/**
+ * The app URL a successful native callback hands back. Since security review M1
+ * that is an interstitial page (who signed in, tap to return) whose only link is
+ * the fixed app URL, not a silent redirect. Asserts that contract and returns
+ * the link (HTML-unescaped).
+ */
+async function appLink(res: Response): Promise<string> {
+	expect(res.status).toBe(200);
+	expect(res.headers.get("Content-Type") ?? "").toContain("text/html");
+	expect(res.headers.get("Content-Security-Policy") ?? "").toContain("default-src 'none'");
+	expect(res.headers.get("Cache-Control")).toBe("no-store");
+	expect(res.headers.get("Location")).toBeNull();
+	expect(res.headers.getSetCookie().some((h) => h.startsWith("tg_session="))).toBe(false);
+	const html = await res.text();
+	const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map((m) =>
+		(m[1] ?? "").replace(/&amp;/g, "&"),
+	);
+	expect(hrefs).toHaveLength(1);
+	expect(html).not.toMatch(/<script/i);
+	const link = hrefs[0] ?? "";
+	expect(link).toMatch(/^com\.averrow\.budgetrip:\/\/auth\/callback\?code=[A-Za-z0-9_-]{43}$/);
+	return link;
+}
+
 const exchange = (code: string, code_verifier: string) =>
 	call("/auth/native/exchange", {
 		method: "POST",
@@ -74,10 +94,8 @@ describe("native sign-in", () => {
 	it("redirects to the fixed app URL with a code, sets no session cookie, and exchanges once", async () => {
 		const verifier = newVerifier();
 		const res = await nativeSignIn(verifier);
-		expect(res.status).toBe(302);
-		const loc = res.headers.get("Location") ?? "";
+		const loc = await appLink(res);
 		expect(loc.startsWith(`${APP}?code=`)).toBe(true);
-		expect(res.headers.getSetCookie().some((h) => h.startsWith("tg_session="))).toBe(false);
 		const code = new URL(loc.replace(/^[^:]+:/, "https:")).searchParams.get("code") ?? "";
 
 		const ok = await exchange(code, verifier);
@@ -95,7 +113,7 @@ describe("native sign-in", () => {
 
 	it("refuses a PKCE mismatch, and the code is burned", async () => {
 		const verifier = newVerifier();
-		const loc = (await nativeSignIn(verifier)).headers.get("Location") ?? "";
+		const loc = await appLink(await nativeSignIn(verifier));
 		const code = new URL(loc.replace(/^[^:]+:/, "https:")).searchParams.get("code") ?? "";
 		expect((await exchange(code, newVerifier())).status).toBe(400);
 		expect((await exchange(code, verifier)).status).toBe(400);
@@ -120,7 +138,7 @@ describe("bearer sessions", () => {
 
 	it("allows a bearer write without an Origin; a cookie write from the native origin is 403", async () => {
 		const verifier = newVerifier();
-		const loc = (await nativeSignIn(verifier)).headers.get("Location") ?? "";
+		const loc = await appLink(await nativeSignIn(verifier));
 		const code = new URL(loc.replace(/^[^:]+:/, "https:")).searchParams.get("code") ?? "";
 		const { token } = await (await exchange(code, verifier)).json<{ token: string }>();
 
@@ -289,8 +307,7 @@ describe("native start: no client-chosen redirect", () => {
 		expect(google.href).not.toContain("evil.example");
 
 		const res = await nativeSignIn(verifier, undefined, extra);
-		expect(res.status).toBe(302);
-		const loc = res.headers.get("Location") ?? "";
+		const loc = await appLink(res);
 		expect(loc.startsWith(`${APP}?code=`)).toBe(true);
 		expect(loc).not.toContain("evil.example");
 		expect((await exchange(codeOf(loc), verifier)).status).toBe(200);
@@ -307,6 +324,10 @@ describe("native start: no client-chosen redirect", () => {
 		expect(cancelled.headers.get("Location")).toBe(`${APP}?error=cancelled`);
 		const bad = await call(`/auth/google/callback?state=nope&code=abc`, { cookie });
 		expect(bad.headers.get("Location")).toBe(`${APP}?error=bad_state`);
+		// Lost/expired tg_oauth cookie on a native state: still the app URL, not JSON.
+		const lost = await call(`/auth/google/callback?state=${state}&code=abc`);
+		expect(lost.status).toBe(302);
+		expect(lost.headers.get("Location")).toBe(`${APP}?error=bad_state`);
 	});
 
 	it("a bad challenge with a return_to still errors to the app URL", async () => {
@@ -321,7 +342,10 @@ describe("bearer vs cookie", () => {
 		const a = await signedInUser();
 		const b = await signedInUser();
 		const { token } = await issueBearer(env, a.id);
-		const res = await call("/me", { cookie: b.cookie, headers: { Authorization: `Bearer ${token}` } });
+		const res = await call("/me", {
+			cookie: b.cookie,
+			headers: { Authorization: `Bearer ${token}` },
+		});
 		expect(res.status).toBe(200);
 		expect((await res.json<{ id: string }>()).id).toBe(a.id);
 
@@ -333,7 +357,9 @@ describe("bearer vs cookie", () => {
 			body: JSON.stringify({ dm: false }),
 		});
 		expect(w.status).toBe(200);
-		const aPrefs = await call("/me/notifications", { headers: { Authorization: `Bearer ${token}` } });
+		const aPrefs = await call("/me/notifications", {
+			headers: { Authorization: `Bearer ${token}` },
+		});
 		expect((await aPrefs.json<{ dm: boolean }>()).dm).toBe(false);
 		const bPrefs = await call("/me/notifications", { cookie: b.cookie });
 		expect((await bPrefs.json<{ dm: boolean }>()).dm).toBe(true);
@@ -441,13 +467,21 @@ describe("chat tickets: edges", () => {
 		const { groupId } = await groupWith(a);
 		const { token } = await issueBearer(env, a.id);
 		expect(
-			(await ws(`/chat/group/${groupId}/ws?ticket=${encodeURIComponent(token)}`, "capacitor://localhost"))
-				.status,
+			(
+				await ws(
+					`/chat/group/${groupId}/ws?ticket=${encodeURIComponent(token)}`,
+					"capacitor://localhost",
+				)
+			).status,
 		).toBe(401);
 		const ticket = await ticketFor(a, "group", groupId);
 		expect(
-			(await ws(`/chat/dm/${groupId}/ws?ticket=${encodeURIComponent(ticket)}`, "capacitor://localhost"))
-				.status,
+			(
+				await ws(
+					`/chat/dm/${groupId}/ws?ticket=${encodeURIComponent(ticket)}`,
+					"capacitor://localhost",
+				)
+			).status,
 		).toBe(401);
 	});
 
@@ -481,8 +515,14 @@ describe("chat tickets: edges", () => {
 		});
 		expect(res.status).toBe(200);
 		expect(
-			(await postJson("/chat/ticket", { kind: "group", id: groupId }, a.cookie, "capacitor://localhost"))
-				.status,
+			(
+				await postJson(
+					"/chat/ticket",
+					{ kind: "group", id: groupId },
+					a.cookie,
+					"capacitor://localhost",
+				)
+			).status,
 		).toBe(403);
 	});
 });

@@ -1,5 +1,5 @@
 import { formatMoney, type TripRequest } from "@tagalong/shared";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
 	api,
 	ApiError,
@@ -11,7 +11,7 @@ import {
 } from "./api.js";
 import { linkTo, navigate } from "./router.js";
 import { WhoElse } from "./WhoElse.js";
-import { askForPushInContext } from "./native.js";
+import { PushOffer, usePushOffer } from "./PushOffer.js";
 
 const LABELS: Record<PlanPackage["label"], string> = {
 	cheapest: "Cheapest",
@@ -154,6 +154,8 @@ function SaveShare({ planId }: { planId: string }) {
 	const [busy, setBusy] = useState(false);
 	const [copied, setCopied] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const push = usePushOffer();
+	const alertHint = useId();
 
 	useEffect(() => {
 		api.savedState(planId).then(setState, () => setState(null));
@@ -194,7 +196,7 @@ function SaveShare({ planId }: { planId: string }) {
 						onClick={() =>
 							act(async () => {
 								const res = await api.save(planId);
-								askForPushInContext();
+								push.offer();
 								return { ...res, alerts_enabled: true };
 							})
 						}
@@ -208,17 +210,23 @@ function SaveShare({ planId }: { planId: string }) {
 							type="checkbox"
 							checked={state.alerts_enabled}
 							disabled={busy}
+							aria-describedby={alertHint}
 							onChange={(e) => {
 								const on = e.target.checked;
 								act(async () => {
 									const res = await api.setAlerts(planId, on);
-									if (on) askForPushInContext();
+									if (on) push.offer();
 									return res;
 								});
 							}}
 						/>
-						Email me if the price drops
+						Alert me if the price drops
 					</label>
+				)}
+				{state.saved && (
+					<p id={alertHint} className="note alert-hint">
+						We'll email you, and send a push in the app if notifications are on.
+					</p>
 				)}
 				{!state.share_url && (
 					<button type="button" disabled={busy} onClick={() => act(() => api.share(planId))}>
@@ -258,6 +266,7 @@ function SaveShare({ planId }: { planId: string }) {
 					</p>
 				</div>
 			)}
+			<PushOffer state={push} question="Get a notification on this phone if the price drops?" />
 			{error && <p className="error">{error}</p>}
 		</div>
 	);

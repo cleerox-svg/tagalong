@@ -159,9 +159,9 @@ describe("push routes: scoping and the device cap (test-engineer)", () => {
 			b.cookie,
 		);
 		expect(byCookie.status).toBe(200);
-		expect((await bearerPost("/me/notifications", { connection_request: false }, bBearer)).status).toBe(
-			200,
-		);
+		expect(
+			(await bearerPost("/me/notifications", { connection_request: false }, bBearer)).status,
+		).toBe(200);
 		// Unknown fields (e.g. a user_id) are refused, not used to pick the target.
 		expect(
 			(await postJson("/me/notifications", { user_id: a.id, dm: true }, b.cookie)).status,
@@ -377,7 +377,7 @@ describe("push dispatch", () => {
 		const price = formatMoney({ amount_minor: 41234, currency: "CAD" });
 		expect(msg.notification).toEqual({
 			title: "Price drop",
-			body: `Raptors vs Celtics is now ${price}`,
+			body: `Raptors vs Celtics now from ${price}`,
 		});
 		expect(msg.data).toEqual({ kind: "price_drop", path: `/plans/${planId}` });
 		const row = await env.DB.prepare("SELECT pushed_at, push_error FROM price_alerts WHERE id = ?")
