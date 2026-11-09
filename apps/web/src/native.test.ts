@@ -381,7 +381,10 @@ describe("nativeSignIn with Apple", () => {
 describe("nativeAfterAccountDeleted", () => {
 	it("forgets the session and push tokens without calling the API", async () => {
 		setNative("android");
-		store.set("budgetrip.session", JSON.stringify({ token: "sess", expires_at: "2999-01-01T00:00:00Z" }));
+		store.set(
+			"budgetrip.session",
+			JSON.stringify({ token: "sess", expires_at: "2999-01-01T00:00:00Z" }),
+		);
 		store.set("budgetrip.push-token", "fcm-1");
 		expect(await getNativeToken()).toBe("sess"); // now cached in memory too
 		const fetchMock = vi.fn();
@@ -395,9 +398,9 @@ describe("nativeAfterAccountDeleted", () => {
 		expect(await getNativeToken()).toBeNull();
 		// A later sign-out has no push token left to unregister.
 		await nativeSignOut().catch(() => undefined);
-		expect(
-			fetchMock.mock.calls.some(([u]) => String(u).endsWith("/push/devices/unregister")),
-		).toBe(false);
+		expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/push/devices/unregister"))).toBe(
+			false,
+		);
 	});
 
 	it("cancels a sign-in in progress", async () => {

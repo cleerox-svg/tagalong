@@ -1,6 +1,11 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
-import { isCurrencyCode } from "@tagalong/shared";
+import {
+	AppleFirstSignInUserSchema,
+	appleDisplayName,
+	isCurrencyCode,
+	type AuthProvider,
+} from "@tagalong/shared";
 import { z } from "zod";
 import { HttpError, newId, nowIso, readJson, type AppEnv } from "../lib/http.js";
 import { requireTrustedWrite, WEB_ORIGINS } from "../lib/security.js";
@@ -10,10 +15,31 @@ import {
 	tagalongStatus,
 	type TagalongRow,
 } from "../tagalong/access.js";
-import { CODE_CHALLENGE_RE, issueNativeCode, native, nativeRedirect } from "./native.js";
-import { endSession, requireUser, startSession } from "./session.js";
+import {
+	APPLE_AUTHORIZE,
+	appleConfig,
+	encryptRefreshToken,
+	exchangeAppleCode,
+	verifyAppleIdToken,
+} from "./apple.js";
+import {
+	CODE_CHALLENGE_RE,
+	issueNativeCode,
+	native,
+	nativeRedirect,
+	timingSafeEqualStr,
+} from "./native.js";
+import { endSession, requireUser, secret, startSession } from "./session.js";
 
 const OAUTH_COOKIE = "tg_oauth";
+/**
+ * Apple's own state cookie (phase 7). Apple's callback is a cross-site POST
+ * (response_mode=form_post), which a SameSite=Lax cookie would not ride on, so
+ * this one is SameSite=None; Secure, scoped to /auth/apple, 10 minutes, and
+ * deleted on use. tg_oauth (Google) is untouched.
+ */
+const APPLE_COOKIE = "tg_oauth_apple";
+const APPLE_COOKIE_PATH = "/auth/apple";
 const GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
 const GOOGLE_ISSUERS = ["accounts.google.com", "https://accounts.google.com"];
@@ -103,10 +129,7 @@ function decodeJwtPayload(jwt: string): unknown {
 }
 
 /** Swaps Google's code for a verified identity and upserts the user. Returns our user id and email. */
-async function googleUser(
-	c: Context<AppEnv>,
-	code: string,
-): Promise<{ id: string; email: string }> {
+async function googleUser(c: Context<AppEnv>, code: string): Promise<SignedInUser> {
 	const tokenRes = await fetch(GOOGLE_TOKEN, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -147,7 +170,7 @@ async function googleUser(
 		.bind(newId(), sub, email, (name ?? email.split("@")[0] ?? "Traveller").slice(0, 80))
 		.first<{ id: string }>();
 	if (!user) throw new HttpError(500, "internal", "Could not save your account.");
-	return { id: user.id, email };
+	return { id: user.id, label: email };
 }
 
 const escapeHtml = (s: string) =>
@@ -195,6 +218,41 @@ p.note{color:#555;font-size:.9rem}
 	});
 }
 
+/** Who a provider signed in: our user id and what to show as "Signed in as". */
+interface SignedInUser {
+	id: string;
+	label: string;
+}
+
+/**
+ * The end of every provider's callback, once its state check passed.
+ * Native: resolve the user, mint a one-time app code and show the interstitial;
+ * any failure goes back to the app's fixed URL as a short error code (the web
+ * session cookie is never set on this path). Web: start the cookie session and
+ * redirect to the (already validated) returnTo with `webStatus` (Google's GET
+ * callback keeps 302; Apple's POST callback uses 303 so the browser GETs).
+ */
+async function completeSignIn(
+	c: Context<AppEnv>,
+	saved: OAuthState,
+	resolveUser: () => Promise<SignedInUser>,
+	webStatus: 302 | 303,
+): Promise<Response> {
+	if (saved.native && saved.codeChallenge) {
+		try {
+			const user = await resolveUser();
+			const appCode = await issueNativeCode(c.env.DB, user.id, saved.codeChallenge);
+			return nativeInterstitial(c, user.label, appCode);
+		} catch (err) {
+			if (!(err instanceof HttpError)) console.error("native sign-in failed", err);
+			const error = err instanceof HttpError ? err.code : "internal";
+			return c.redirect(nativeRedirect({ error }), webStatus);
+		}
+	}
+	await startSession(c, (await resolveUser()).id);
+	return c.redirect(saved.returnTo, webStatus);
+}
+
 auth.get("/auth/google/callback", async (c) => {
 	const raw = await getSignedCookie(c, c.env.SESSION_SECRET, OAUTH_COOKIE);
 	deleteCookie(c, OAUTH_COOKIE, { path: "/auth" });
@@ -205,19 +263,10 @@ auth.get("/auth/google/callback", async (c) => {
 	if (saved?.native && saved.codeChallenge) {
 		// Native: always back to the app's fixed URL, with a code or a short error.
 		// The web session cookie is never set on this path.
-		const challenge = saved.codeChallenge;
 		if (!state || state !== saved.state)
 			return c.redirect(nativeRedirect({ error: "bad_state" }), 302);
 		if (!code) return c.redirect(nativeRedirect({ error: "cancelled" }), 302);
-		try {
-			const user = await googleUser(c, code);
-			const appCode = await issueNativeCode(c.env.DB, user.id, challenge);
-			return nativeInterstitial(c, user.email, appCode);
-		} catch (err) {
-			if (!(err instanceof HttpError)) console.error("native sign-in failed", err);
-			const error = err instanceof HttpError ? err.code : "internal";
-			return c.redirect(nativeRedirect({ error }), 302);
-		}
+		return completeSignIn(c, saved, () => googleUser(c, code), 302);
 	}
 
 	// A native flow whose cookie was lost: back to the app (fixed URL), not JSON.
@@ -227,8 +276,177 @@ auth.get("/auth/google/callback", async (c) => {
 		throw new HttpError(400, "bad_state", "Sign-in expired or was started elsewhere. Try again.");
 	}
 	if (!code) return c.redirect(saved.returnTo, 302); // the user cancelled at Google
-	await startSession(c, (await googleUser(c, code)).id);
-	return c.redirect(saved.returnTo, 302);
+	return completeSignIn(c, saved, () => googleUser(c, code), 302);
+});
+
+// ---------------------------------------------------------------------------
+// Sign in with Apple (phase 7). Protocol details are in ./apple.ts.
+// ---------------------------------------------------------------------------
+
+/** tg_oauth_apple: as OAuthState, plus the OpenID nonce the id_token must echo. */
+type AppleOAuthState = OAuthState & { nonce: string };
+
+const appleRedirectUri = (url: string) => `${new URL(url).origin}/auth/apple/callback`;
+
+const appleCookieOpts = {
+	httpOnly: true,
+	secure: true,
+	sameSite: "None",
+	path: APPLE_COOKIE_PATH,
+} as const;
+
+auth.get("/auth/apple/start", async (c) => {
+	const isNative = c.req.query("native") === "1";
+	const cfg = appleConfig(c.env);
+	if (!cfg || !c.env.SESSION_SECRET || c.env.SESSION_SECRET.length < 32) {
+		if (isNative) return c.redirect(nativeRedirect({ error: "misconfigured" }), 302);
+		throw new HttpError(500, "misconfigured", "Sign in with Apple is not configured.");
+	}
+	const state = isNative ? `${NATIVE_STATE_PREFIX}${newId()}` : newId();
+	const saved: AppleOAuthState = {
+		state,
+		nonce: newId(),
+		returnTo: safeReturn(c.req.query("return_to")),
+	};
+	if (isNative) {
+		const challenge = c.req.query("code_challenge") ?? "";
+		if (!CODE_CHALLENGE_RE.test(challenge))
+			return c.redirect(nativeRedirect({ error: "bad_request" }), 302);
+		saved.native = true;
+		saved.codeChallenge = challenge;
+	}
+	await setSignedCookie(c, APPLE_COOKIE, JSON.stringify(saved), secret(c.env), {
+		...appleCookieOpts,
+		maxAge: 600,
+	});
+	const q = new URLSearchParams({
+		client_id: cfg.servicesId,
+		redirect_uri: appleRedirectUri(c.req.url),
+		response_type: "code",
+		response_mode: "form_post",
+		scope: "name email",
+		state,
+		nonce: saved.nonce,
+	});
+	return c.redirect(`${APPLE_AUTHORIZE}?${q}`, 302);
+});
+
+/** A form field as a string (Apple posts urlencoded fields), else undefined. */
+const field = (v: unknown): string | undefined =>
+	typeof v === "string" && v.length > 0 ? v : undefined;
+
+function parseAppleState(raw: string | false | undefined): AppleOAuthState | null {
+	if (!raw) return null;
+	try {
+		const v = JSON.parse(raw) as Partial<AppleOAuthState>;
+		return typeof v.state === "string" &&
+			typeof v.nonce === "string" &&
+			typeof v.returnTo === "string"
+			? (v as AppleOAuthState)
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Apple's first-sign-in `user` JSON (name, email). Unsigned, so only ever a
+ * display-name hint for a NEW account; the email always comes from the
+ * verified id_token.
+ */
+function appleNameHint(raw: string | undefined): string | null {
+	if (!raw || raw.length > 2000) return null;
+	try {
+		const parsed = AppleFirstSignInUserSchema.safeParse(JSON.parse(raw));
+		return parsed.success ? appleDisplayName(parsed.data) : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Swaps Apple's code for a verified identity and upserts the user by
+ * apple_sub. Returns our user id and something to show as "Signed in as".
+ *
+ * No automatic linking to an existing Google account with the same email:
+ * Apple's email is often a private relay address, and where it isn't, an
+ * email match is not proof that the same person controls both accounts
+ * (linking on it would let whoever controls one sign-in take over the other).
+ * An Apple sign-in therefore always has its own account.
+ *
+ * New accounts get google_sub = 'apple:' || sub (google_sub is NOT NULL
+ * UNIQUE; migration 0009). The name hint is used on INSERT only. A row whose
+ * deleted_at is set is never signed in to (the conflict UPDATE's WHERE skips
+ * it, so nothing comes back); in practice deletion clears apple_sub, so the
+ * same Apple ID simply gets a fresh account.
+ */
+async function appleUser(
+	c: Context<AppEnv>,
+	code: string,
+	nonce: string,
+	userJson: string | undefined,
+): Promise<SignedInUser> {
+	const cfg = appleConfig(c.env);
+	if (!cfg) throw new HttpError(500, "misconfigured", "Sign in with Apple is not configured.");
+	const tokens = await exchangeAppleCode(cfg, code, appleRedirectUri(c.req.url));
+	const claims = await verifyAppleIdToken(tokens.id_token, cfg.servicesId, nonce);
+	// Apple vouches for the address it puts in the id_token (a real one or a
+	// private relay); an unverified one is not stored.
+	const email = claims.email && claims.email_verified !== false ? claims.email : "";
+	const rtEnc = tokens.refresh_token
+		? await encryptRefreshToken(c.env, tokens.refresh_token)
+		: null;
+	const user = await c.env.DB.prepare(
+		`INSERT INTO users (id, google_sub, apple_sub, email, display_name, apple_refresh_token_enc)
+		 VALUES (?1, 'apple:' || ?2, ?2, ?3, ?4, ?5)
+		 ON CONFLICT (apple_sub) DO UPDATE SET
+		   email = CASE WHEN excluded.email <> '' THEN excluded.email ELSE users.email END,
+		   apple_refresh_token_enc = COALESCE(excluded.apple_refresh_token_enc, users.apple_refresh_token_enc)
+		 WHERE users.deleted_at IS NULL
+		 RETURNING id, email, display_name`,
+	)
+		.bind(newId(), claims.sub, email, appleNameHint(userJson) ?? "Traveller", rtEnc)
+		.first<{ id: string; email: string; display_name: string }>();
+	if (!user) throw new HttpError(401, "account_deleted", "That account has been deleted.");
+	return { id: user.id, label: user.email || user.display_name };
+}
+
+/**
+ * Apple's callback: a cross-site form POST from appleid.apple.com
+ * (response_mode=form_post). Deliberately NOT behind requireTrustedWrite (its
+ * Origin is Apple's, and its body is a form): it is the only write route
+ * without it. What protects it instead: the state must match the signed,
+ * single-use tg_oauth_apple cookie (constant-time), and the id_token must
+ * carry that flow's nonce. It never reads or trusts the session cookie.
+ */
+auth.post("/auth/apple/callback", async (c) => {
+	const raw = await getSignedCookie(c, secret(c.env), APPLE_COOKIE);
+	deleteCookie(c, APPLE_COOKIE, appleCookieOpts);
+	const saved = parseAppleState(raw);
+
+	let form: Record<string, unknown> = {};
+	try {
+		form = await c.req.parseBody();
+	} catch {
+		form = {};
+	}
+	const state = field(form.state);
+	const code = field(form.code);
+	const error = field(form.error);
+	const stateOk = !!saved && !!state && timingSafeEqualStr(state, saved.state);
+
+	if (saved?.native && saved.codeChallenge) {
+		if (!stateOk) return c.redirect(nativeRedirect({ error: "bad_state" }), 303);
+		if (error || !code) return c.redirect(nativeRedirect({ error: "cancelled" }), 303);
+		return completeSignIn(c, saved, () => appleUser(c, code, saved.nonce, field(form.user)), 303);
+	}
+	if (!saved?.native && state?.startsWith(NATIVE_STATE_PREFIX))
+		return c.redirect(nativeRedirect({ error: "bad_state" }), 303);
+	if (!saved || !stateOk) {
+		throw new HttpError(400, "bad_state", "Sign-in expired or was started elsewhere. Try again.");
+	}
+	if (error || !code) return c.redirect(saved.returnTo, 303); // the user cancelled at Apple
+	return completeSignIn(c, saved, () => appleUser(c, code, saved.nonce, field(form.user)), 303);
 });
 
 auth.post("/auth/logout", requireTrustedWrite, (c) => {

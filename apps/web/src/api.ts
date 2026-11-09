@@ -1,5 +1,7 @@
 import type {
+	AuthProvider,
 	BlockedUser,
+	DeleteAccountRequest,
 	ChatMessage,
 	Connection,
 	EventCategoryId,
@@ -20,7 +22,6 @@ import type {
 	NotificationPrefs,
 	NotificationPrefsUpdate,
 } from "@tagalong/shared";
-import { DELETE_CONFIRM_WORD } from "./account.js";
 import { clearNativeToken, getNativeToken, isNative } from "./native.js";
 
 export const API_BASE = __API_BASE__;
@@ -74,10 +75,8 @@ export interface Me {
 	tagalong: TagalongStatus;
 	is_moderator: boolean;
 	/** Phase 7: how this account signs in. Older APIs omit it. */
-	sign_in_providers?: SignInProviderId[];
+	sign_in_providers?: AuthProvider[];
 }
-
-export type SignInProviderId = "google" | "apple";
 
 export interface PlanItem {
 	kind: string;
@@ -274,11 +273,10 @@ export const api = {
 	 * Phase 7: delete the account and everything tied to it. The server clears
 	 * the session; every request after this is a 401.
 	 */
-	deleteAccount: () =>
-		request<{ ok: true }>("/me/delete", {
-			method: "POST",
-			body: JSON.stringify({ confirm: DELETE_CONFIRM_WORD }),
-		}),
+	deleteAccount: () => {
+		const body: DeleteAccountRequest = { confirm: "DELETE" };
+		return request<{ ok: true }>("/me/delete", { method: "POST", body: JSON.stringify(body) });
+	},
 };
 
 /** An event from a pasted link or a browse, ready to pin into the form. */

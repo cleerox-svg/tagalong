@@ -12,7 +12,12 @@
  * Nothing here is secret: the session token lives only in secure storage and
  * memory, and the PKCE verifier only in memory for the length of one sign-in.
  */
-import { isSafeAppPath, NativeAuthExchangeSchema, type DevicePlatform } from "@tagalong/shared";
+import {
+	isSafeAppPath,
+	NativeAuthExchangeSchema,
+	type AuthProvider,
+	type DevicePlatform,
+} from "@tagalong/shared";
 import type { FirebaseMessagingPlugin } from "@capacitor-firebase/messaging";
 import { navigate } from "./router.js";
 
@@ -297,14 +302,12 @@ export async function handleAuthUrl(url: string): Promise<void> {
 	}
 }
 
-export type SignInProvider = "google" | "apple";
-
 /**
  * Sign in with Google or Apple in the system browser. Resolves once a session token is
  * stored; rejects with a `NativeSignInError` (its message is safe to show).
  * Starting again while one is pending cancels the old one.
  */
-export async function nativeSignIn(provider: SignInProvider): Promise<void> {
+export async function nativeSignIn(provider: AuthProvider): Promise<void> {
 	if (pending) {
 		const old = pending;
 		pending = null;
