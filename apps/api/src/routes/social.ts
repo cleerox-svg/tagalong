@@ -106,6 +106,11 @@ social.get("/connections", ...member, async (c) => {
  * The INSERT's SELECT is guarded by NOT EXISTS (block either way), so a block
  * that lands after the checks above stops both the insert and the
  * ON CONFLICT update: no row comes back, and the answer is a 404.
+ *
+ * A push goes out only on a real transition, read from the same statement:
+ * a new or reopened request gets created_at = now, an accept gets
+ * responded_at = now. Re-posting a pending request or an accepted connection
+ * changes neither, so it notifies nobody.
  */
 social.post("/connections", ...member, async (c) => {
 	const u = c.get("tg");
@@ -127,6 +132,7 @@ social.post("/connections", ...member, async (c) => {
 	const reopen = `((connections.status = 'closed'
 		  AND (connections.closed_by IS NULL OR connections.closed_by = excluded.requested_by))
 		OR (connections.status = 'declined' AND connections.requested_by <> excluded.requested_by))`;
+	const now = nowIso();
 	const row = await db
 		.prepare(
 			`INSERT INTO connections (id, user_lo, user_hi, requested_by, status, created_at)
@@ -141,13 +147,14 @@ social.post("/connections", ...member, async (c) => {
 			   created_at = CASE WHEN ${reopen} THEN excluded.created_at ELSE connections.created_at END,
 			   closed_by = CASE WHEN ${reopen} THEN NULL ELSE connections.closed_by END,
 			   requested_by = CASE WHEN ${reopen} THEN excluded.requested_by ELSE connections.requested_by END
-			 RETURNING id`,
+			 RETURNING id, created_at, responded_at`,
 		)
-		.bind(newId(), lo, hi, u.id, nowIso(), lo, hi, hi, lo)
-		.first<{ id: string }>();
+		.bind(newId(), lo, hi, u.id, now, lo, hi, hi, lo)
+		.first<{ id: string; created_at: string; responded_at: string | null }>();
 	if (!row) throw notFound;
 	const connection = await connectionView(db, row.id, u.id);
-	notify(c.env, deferOf(c), connectionEvent(connection, u.id));
+	const changed = row.created_at === now || row.responded_at === now;
+	notify(c.env, deferOf(c), changed ? connectionEvent(connection, u.id) : null);
 	return c.json({ connection });
 });
 

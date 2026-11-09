@@ -181,6 +181,31 @@ unset: pushes are skipped and the Worker logs why (never the key itself).
    and `GoogleService-Info.plist` in `apps/web/ios/App/App/`. They are
    gitignored; **never commit them**. Each developer keeps their own copy.
 
+### Mobile sign-in: blocker before store release
+
+Native sign-in currently hands the one-time code back to the app on the
+custom scheme `com.averrow.budgetrip://auth/callback` (`NATIVE_CALLBACK` in
+`apps/api/src/auth/native.ts`). **Any installed app can claim a custom
+scheme**, so another app could receive that redirect. Until this is fixed the
+API shows an interstitial ("Signed in as ... — Return to Budgetrip") instead
+of redirecting silently; that is an interim mitigation, not a fix (PKCE still
+stops a code thief that lacks the verifier, but don't rely on that alone).
+
+**Before the app ships to the App Store or Play Store**, switch
+`NATIVE_CALLBACK` to a verified HTTPS link on `tagalong.averrow.com`, e.g.
+`https://tagalong.averrow.com/auth/app-callback`:
+
+- Android App Link: serve `https://tagalong.averrow.com/.well-known/assetlinks.json`
+  with the package `com.averrow.budgetrip` and the release signing
+  certificate's SHA-256 fingerprint, and add an intent filter with
+  `android:autoVerify="true"` for that host and path.
+- iOS Universal Link: serve
+  `https://tagalong.averrow.com/.well-known/apple-app-site-association`
+  (`applinks`, your Team ID + `com.averrow.budgetrip`, the callback path), and
+  add the Associated Domains entitlement `applinks:tagalong.averrow.com`.
+- Then update the app's URL listener and drop the interstitial. Add the `hold`
+  label to that PR.
+
 ## 2. GitHub repository secrets
 
 Settings → Secrets and variables → Actions → **Secrets**:

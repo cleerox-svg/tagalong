@@ -11,7 +11,10 @@
  *   plus the same users-table checks as tagalong/access.ts). DMs only on an
  *   accepted connection; groups only to current members.
  * - One push per user per room per THROTTLE_MS (push_throttle, claimed
- *   atomically). At most MAX_SENDS device sends per event.
+ *   atomically, only for users a device send was selected for, and released
+ *   again when every send to that user failed). At most MAX_RECIPIENTS users
+ *   (least recently pushed in this room first) and MAX_SENDS device sends per
+ *   event, so every chosen recipient gets at least one send.
  * - Privacy: never a message body, a location or an email. Titles and bodies
  *   carry only a Tagalong display name, an event name or a stored price.
  * - Price drops: the figure is the stored price_alerts row (integer minor
@@ -19,8 +22,14 @@
  *
  * Nothing here throws: a failure is logged and recorded on the device row.
  */
-import { formatMoney, isSafeAppPath, type Connection, type RoomKind } from "@tagalong/shared";
-import { DEFAULT_NOTIFICATION_PREFS, type NotificationKind } from "@tagalong/shared";
+import {
+	DEFAULT_NOTIFICATION_PREFS,
+	formatMoney,
+	isSafeAppPath,
+	type Connection,
+	type NotificationKind,
+	type RoomKind,
+} from "@tagalong/shared";
 import { roomAudience, type Defer } from "../chat/notify.js";
 import { nowIso } from "../lib/http.js";
 import { isPushConfigured, sendPush, type PushResult } from "../providers/fcm.js";
@@ -39,12 +48,16 @@ export type PushEvent =
 
 /** One push per user per room in this window: a busy chat doesn't buzz on every message. */
 export const THROTTLE_MS = 5 * 60_000;
-/** Recipients considered per event. */
-export const MAX_RECIPIENTS = 50;
 /** Newest active devices tried per recipient. */
 export const MAX_DEVICES_PER_RECIPIENT = 3;
-/** Device sends per event, in total (bounds subrequests). */
-export const MAX_SENDS = 50;
+/**
+ * Device sends per event, in total (bounds subrequests). 49, not 50: on a cold
+ * isolate the OAuth token fetch is one more subrequest, and token + 49 sends
+ * stays within the free plan's 50-subrequest limit per invocation.
+ */
+export const MAX_SENDS = 49;
+/** Recipients per event. Never more than MAX_SENDS: each one gets at least one device send. */
+export const MAX_RECIPIENTS = MAX_SENDS;
 /** Names in a notification are cut to this many characters. */
 const NAME_MAX = 60;
 
@@ -196,7 +209,10 @@ async function plan(env: Env, event: PushEvent): Promise<Planned | null> {
 /**
  * Of `candidates`, who may get this push now: not the actor, the kind turned
  * on (or on by default), at least one active device, and for Tagalong kinds
- * opted in, not suspended, 18+ and no block either way with the actor.
+ * opted in, not suspended, 18+ and no block either way with the actor. With a
+ * room key, users still inside the throttle window are skipped (the claim
+ * stays the atomic check) and the least recently pushed come first, so a big
+ * group doesn't always notify the same MAX_RECIPIENTS people.
  */
 async function eligible(db: D1Database, p: Planned): Promise<string[]> {
 	const ids = [...new Set(p.candidates)].filter((id) => id !== p.actorId);
@@ -208,34 +224,43 @@ async function eligible(db: D1Database, p: Planned): Promise<string[]> {
 		     OR (b.blocker_id = u.id AND b.blocked_id = ?1))`
 		: "";
 	// p.kind is one of the fixed NOTIFICATION_KINDS, each a notification_prefs column.
+	// With no room key (?5 NULL) the throttle join matches nothing.
 	const { results } = await db
 		.prepare(
 			`SELECT u.id FROM users u LEFT JOIN notification_prefs np ON np.user_id = u.id
+			 LEFT JOIN push_throttle pt ON pt.user_id = u.id AND pt.room_key = ?5
 			 WHERE u.id IN (SELECT value FROM json_each(?2))
 			   AND u.id IS NOT ?1
 			   AND COALESCE(np.${p.kind}, ?3) = 1
 			   AND EXISTS (SELECT 1 FROM push_devices d WHERE d.user_id = u.id AND d.disabled_at IS NULL)
+			   AND (pt.last_sent_at IS NULL OR pt.last_sent_at < ?6)
 			   ${gate}
-			 ORDER BY u.id LIMIT ?4`,
+			 ORDER BY pt.last_sent_at IS NOT NULL, pt.last_sent_at, random() LIMIT ?4`,
 		)
 		.bind(
 			p.actorId,
 			JSON.stringify(ids),
 			DEFAULT_NOTIFICATION_PREFS[p.kind] ? 1 : 0,
 			MAX_RECIPIENTS,
+			p.roomKey,
+			new Date(Date.now() - THROTTLE_MS).toISOString(),
 		)
 		.all<{ id: string }>();
 	return results.map((r) => r.id);
 }
 
-/** Claims the throttle slot for each user atomically; returns only those who got it. */
+/**
+ * Claims the throttle slot for each user atomically; returns only those who
+ * got it, and the timestamp claimed (for releaseThrottle).
+ */
 async function claimThrottle(
 	db: D1Database,
 	userIds: string[],
 	roomKey: string,
-): Promise<string[]> {
-	if (userIds.length === 0) return [];
+): Promise<{ claimed: string[]; at: string }> {
 	const now = Date.now();
+	const at = new Date(now).toISOString();
+	if (userIds.length === 0) return { claimed: [], at };
 	const { results } = await db
 		.prepare(
 			`INSERT INTO push_throttle (user_id, room_key, last_sent_at)
@@ -244,18 +269,39 @@ async function claimThrottle(
 			 WHERE push_throttle.last_sent_at < ?
 			 RETURNING user_id`,
 		)
-		.bind(
-			roomKey,
-			new Date(now).toISOString(),
-			JSON.stringify(userIds),
-			new Date(now - THROTTLE_MS).toISOString(),
-		)
+		.bind(roomKey, at, JSON.stringify(userIds), new Date(now - THROTTLE_MS).toISOString())
 		.all<{ user_id: string }>();
-	return results.map((r) => r.user_id);
+	return { claimed: results.map((r) => r.user_id), at };
+}
+
+/**
+ * Gives back the slots we claimed at `at` for users no send reached, so the
+ * next message can try again. Only our own claim (same timestamp) is removed:
+ * a newer claim by a concurrent dispatch is left alone. Best effort.
+ */
+async function releaseThrottle(
+	db: D1Database,
+	userIds: string[],
+	roomKey: string,
+	at: string,
+): Promise<void> {
+	if (userIds.length === 0) return;
+	try {
+		await db
+			.prepare(
+				`DELETE FROM push_throttle WHERE room_key = ? AND last_sent_at = ?
+				 AND user_id IN (SELECT value FROM json_each(?))`,
+			)
+			.bind(roomKey, at, JSON.stringify(userIds))
+			.run();
+	} catch (err) {
+		console.error("push throttle release failed", err);
+	}
 }
 
 interface Device {
 	id: string;
+	user_id: string;
 	token: string;
 }
 
@@ -264,7 +310,7 @@ async function devicesOf(db: D1Database, userIds: string[]): Promise<Device[]> {
 	if (userIds.length === 0) return [];
 	const { results } = await db
 		.prepare(
-			`SELECT id, token FROM (
+			`SELECT id, user_id, token FROM (
 			   SELECT id, user_id, token,
 			     ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY last_seen_at DESC, id) AS rn
 			   FROM push_devices
@@ -341,7 +387,7 @@ async function dispatchPriceDrop(env: Env, alertId: string): Promise<void> {
 		tagalong: false,
 		roomKey: null,
 		title: "Price drop",
-		body: `${clip(alert.name)} is now ${price}`,
+		body: `${clip(alert.name)} now from ${price}`,
 		path: `/plans/${alert.plan_id}`,
 	};
 	if (!isSafeAppPath(p.path)) return;
@@ -369,10 +415,30 @@ export async function dispatchPush(env: Env, event: PushEvent): Promise<void> {
 		if (event.kind === "price_drop") return await dispatchPriceDrop(env, event.alertId);
 		const p = await plan(env, event);
 		if (!p || !isSafeAppPath(p.path)) return;
-		let recipients = await eligible(env.DB, p);
-		if (p.roomKey) recipients = await claimThrottle(env.DB, recipients, p.roomKey);
-		const devices = await devicesOf(env.DB, recipients);
-		if (devices.length > 0) await sendAll(env, devices, p);
+		const recipients = await eligible(env.DB, p);
+		let devices = await devicesOf(env.DB, recipients);
+		if (!p.roomKey) {
+			if (devices.length > 0) await sendAll(env, devices, p);
+			return;
+		}
+		// Claim only for users a send was actually selected for.
+		const { claimed, at } = await claimThrottle(
+			env.DB,
+			[...new Set(devices.map((d) => d.user_id))],
+			p.roomKey,
+		);
+		devices = devices.filter((d) => claimed.includes(d.user_id));
+		if (devices.length === 0) return;
+		const results = await sendAll(env, devices, p);
+		const reached = new Set(
+			devices.filter((_, i) => results[i]?.status === "ok").map((d) => d.user_id),
+		);
+		await releaseThrottle(
+			env.DB,
+			claimed.filter((id) => !reached.has(id)),
+			p.roomKey,
+			at,
+		);
 	} catch (err) {
 		console.error("push dispatch failed", event.kind, err);
 	}

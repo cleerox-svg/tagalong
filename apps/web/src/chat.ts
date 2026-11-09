@@ -158,7 +158,8 @@ export function chatSocketUrl(apiBase: string, kind: RoomKind, id: string): stri
 
 /**
  * Add a socket ticket to the chat URL. The app has no session cookie, so it
- * fetches a one-time ticket (`POST /chat/ticket`) before every connect.
+ * fetches a short-lived ticket (60 s, bound to the user and the room) from
+ * `POST /chat/ticket` before every connect.
  */
 export function withTicket(url: string, ticket: string): string {
 	return `${url}${url.includes("?") ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`;
@@ -370,7 +371,7 @@ export function useChat(kind: RoomKind, id: string): UseChat {
 				openSocket(url);
 				return;
 			}
-			// In the app: a fresh one-time ticket for every attempt.
+			// In the app: a fresh short-lived ticket for every attempt.
 			void (async () => {
 				let ticket: string | undefined;
 				try {

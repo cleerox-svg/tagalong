@@ -12,7 +12,7 @@ import { BackLink, ErrorCard } from "./ErrorCard.js";
 import { linkTo, navigate } from "./router.js";
 import { BlockDialog, ConfirmDialog, ReportDialog } from "./SafetyActions.js";
 import { useMe } from "./TagalongGate.js";
-import { askForPushInContext } from "./native.js";
+import { PushOffer, usePushOffer } from "./PushOffer.js";
 
 const time = (iso: string) => {
 	const d = new Date(iso);
@@ -125,6 +125,7 @@ export function ChatPanel({
 	const logRef = useRef<HTMLDivElement>(null);
 	const nearBottom = useRef(true);
 	const ids = useId();
+	const push = usePushOffer();
 
 	// Stay pinned to the newest message unless the reader has scrolled up.
 	useLayoutEffect(() => {
@@ -166,7 +167,8 @@ export function ChatPanel({
 		nearBottom.current = true;
 		if (await chat.send(body)) {
 			setDraft("");
-			askForPushInContext();
+			// Group chats can be busy: only a DM offers push.
+			if (kind === "dm") push.offer();
 		}
 		setSending(false);
 	};
@@ -258,6 +260,7 @@ export function ChatPanel({
 					{sending ? "Sending…" : "Send"}
 				</button>
 			</form>
+			{kind === "dm" && <PushOffer state={push} question="Get a notification when they reply?" />}
 
 			{dialog?.kind === "report" && (
 				<ReportDialog

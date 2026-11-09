@@ -13,6 +13,7 @@
  * memory, and the PKCE verifier only in memory for the length of one sign-in.
  */
 import { isSafeAppPath, NativeAuthExchangeSchema, type DevicePlatform } from "@tagalong/shared";
+import type { FirebaseMessagingPlugin } from "@capacitor-firebase/messaging";
 import { navigate } from "./router.js";
 
 const API_BASE = __API_BASE__;
@@ -330,13 +331,14 @@ export async function nativeSignIn(): Promise<void> {
 	});
 }
 
-/** For tests: forget any sign-in in progress and the cached token. */
+/** For tests: forget any sign-in in progress and every in-memory cache (as on a relaunch). */
 export function resetNativeStateForTests(): void {
 	pending = null;
 	cached = undefined;
 	loading = null;
-	pushToken = null;
+	pushToken = undefined;
 	listenersAttached = null;
+	messagingPlugin = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,13 +346,71 @@ export function resetNativeStateForTests(): void {
 // ---------------------------------------------------------------------------
 
 export type PushPermission = "granted" | "denied" | "prompt" | "unsupported";
+/** What enabling push came to. "failed": it should work here, but didn't this time. */
+export type PushOutcome = PushPermission | "failed";
 
-const messaging = async () =>
-	(await import("@capacitor-firebase/messaging")).FirebaseMessaging;
+let messagingPlugin: FirebaseMessagingPlugin | null = null;
 
-/** The FCM token we registered, so sign-out can unregister it. */
-let pushToken: string | null = null;
+/**
+ * The native FirebaseMessaging plugin. Registered straight through
+ * @capacitor/core rather than by importing the package: its entry also wires a
+ * web implementation that needs the Firebase web SDK, which the PWA
+ * deliberately doesn't ship. In the app the native side answers every call.
+ */
+async function messaging(): Promise<FirebaseMessagingPlugin> {
+	if (!messagingPlugin) {
+		const { registerPlugin } = await import("@capacitor/core");
+		messagingPlugin = registerPlugin<FirebaseMessagingPlugin>("FirebaseMessaging");
+	}
+	return messagingPlugin;
+}
+
+/** Capacitor rejects a call to a plugin the native shell doesn't have with this code. */
+const unimplemented = (err: unknown) =>
+	(err as { code?: unknown } | null)?.code === "UNIMPLEMENTED";
+
+export class PushRegisterError extends Error {
+	constructor(readonly status: number) {
+		super(`Device registration failed: HTTP ${status}`);
+	}
+}
+
+/** Log a push failure without its details (which could carry the device token). */
+function warnPush(what: string, err: unknown): void {
+	const status = err instanceof PushRegisterError ? ` (HTTP ${err.status})` : "";
+	const code = (err as { code?: unknown } | null)?.code;
+	console.warn(`Push: ${what} failed${status}${typeof code === "string" ? ` [${code}]` : ""}`);
+}
+
+const PUSH_TOKEN_KEY = "budgetrip.push-token";
+
+/**
+ * The FCM token we last registered, so sign-out can unregister it, also after
+ * a relaunch. undefined: not read from secure storage yet. null: none.
+ */
+let pushToken: string | null | undefined;
 let listenersAttached: Promise<void> | null = null;
+
+async function storedPushToken(): Promise<string | null> {
+	if (pushToken !== undefined) return pushToken;
+	try {
+		const { value } = await (await secureStorage()).get({ key: PUSH_TOKEN_KEY });
+		return typeof value === "string" && value ? value : null;
+	} catch {
+		return null; // `get` rejects when the key doesn't exist.
+	}
+}
+
+async function rememberPushToken(token: string | null): Promise<void> {
+	pushToken = token;
+	try {
+		const store = await secureStorage();
+		if (token) await store.set({ key: PUSH_TOKEN_KEY, value: token });
+		else await store.remove({ key: PUSH_TOKEN_KEY });
+	} catch {
+		// Kept in memory for this run.
+	}
+}
 
 /** The in-app path a notification tap should open, or null when it isn't safe. */
 export function safeTapPath(data: unknown): string | null {
@@ -359,11 +419,18 @@ export function safeTapPath(data: unknown): string | null {
 	return typeof path === "string" && isSafeAppPath(path) ? path : null;
 }
 
-async function registerDevice(token: string): Promise<void> {
+/**
+ * Register this device for push with the signed-in account. Resolves false
+ * when there's nothing to do (signed out, or not iOS / Android); throws a
+ * `PushRegisterError` when the API refuses.
+ */
+export async function registerDevice(token: string): Promise<boolean> {
 	const platform = nativePlatform();
-	if (!platform || !(await getNativeToken())) return;
+	if (!platform || !(await getNativeToken())) return false;
 	const res = await nativePost("/push/devices", { platform, token });
-	if (res.ok) pushToken = token;
+	if (!res.ok) throw new PushRegisterError(res.status);
+	await rememberPushToken(token);
+	return true;
 }
 
 /**
@@ -379,34 +446,40 @@ export function attachPushListeners(): Promise<void> {
 			if (path) navigate(path);
 		});
 		await fm.addListener("tokenReceived", (e) => {
-			if (typeof e.token === "string" && e.token) void registerDevice(e.token).catch(() => {});
+			if (typeof e.token === "string" && e.token)
+				registerDevice(e.token).catch((err: unknown) => warnPush("token refresh", err));
 		});
-	})().catch(() => {
+	})().catch((err: unknown) => {
 		listenersAttached = null;
+		if (!unimplemented(err)) warnPush("push listeners", err);
 	});
 	return listenersAttached;
 }
 
-export async function pushPermission(): Promise<PushPermission> {
-	if (!isNative()) return "unsupported";
+/** The OS permission. "unsupported" outside the app or without the plugin. */
+export async function pushPermission(): Promise<PushOutcome> {
+	if (!nativePlatform()) return "unsupported";
 	try {
 		const { receive } = await (await messaging()).checkPermissions();
 		if (receive === "granted" || receive === "denied") return receive;
 		return "prompt";
-	} catch {
-		return "unsupported";
+	} catch (err) {
+		if (unimplemented(err)) return "unsupported";
+		warnPush("permission check", err);
+		return "failed";
 	}
 }
 
 /**
  * Ask for permission (only if it hasn't been decided) and register this
- * device. Resolves to the permission afterwards.
+ * device. Resolves to the permission afterwards, or "failed" when asking,
+ * getting a token or registering it went wrong. Never throws.
  */
-export async function enablePush(): Promise<PushPermission> {
-	if (!isNative()) return "unsupported";
+export async function enablePush(): Promise<PushOutcome> {
+	let perm = await pushPermission();
+	if (perm === "unsupported" || perm === "failed") return perm;
 	try {
 		const fm = await messaging();
-		let perm = await pushPermission();
 		if (perm === "prompt") {
 			const { receive } = await fm.requestPermissions();
 			perm = receive === "granted" ? "granted" : receive === "denied" ? "denied" : "prompt";
@@ -414,10 +487,13 @@ export async function enablePush(): Promise<PushPermission> {
 		if (perm !== "granted") return perm;
 		await attachPushListeners();
 		const { token } = await fm.getToken();
-		if (token) await registerDevice(token);
+		if (!token) throw new Error("no token");
+		await registerDevice(token);
 		return "granted";
-	} catch {
-		return "unsupported";
+	} catch (err) {
+		if (unimplemented(err)) return "unsupported";
+		warnPush("enabling push", err);
+		return "failed";
 	}
 }
 
@@ -441,30 +517,64 @@ function askedBefore(): boolean {
 	}
 }
 
-/**
- * Ask for push permission in context: after a DM, a connection request or
- * acceptance, or saving a trip / turning on a price alert. Asks at most once,
- * only inside the app, and only while the OS hasn't been asked yet.
- * Fire-and-forget; never throws.
- */
-export function askForPushInContext(): void {
-	if (!isNative() || askedBefore()) return;
-	void (async () => {
-		if ((await pushPermission()) !== "prompt") return;
-		try {
-			globalThis.localStorage?.setItem(ASKED_KEY, "1");
-		} catch {
-			// Not remembering only means we may ask again; the OS still won't re-prompt.
-		}
-		await enablePush();
-	})().catch(() => undefined);
+function rememberAsked(): void {
+	try {
+		globalThis.localStorage?.setItem(ASKED_KEY, "1");
+	} catch {
+		// Not remembering only means we may offer again; the OS still won't re-prompt.
+	}
 }
 
-/** Sign out in the app: unregister this device (best effort), end the session, forget the token. */
+/**
+ * Whether to offer push in context (after a DM, a connection request or
+ * acceptance, saving a trip or turning on a price alert): only inside the
+ * app, only while the OS hasn't been asked, and only if the in-app offer
+ * wasn't answered before. The caller shows its own explainer first and calls
+ * `askForPushInContext` or `declinePushInContext`. Never throws.
+ */
+export async function shouldOfferPush(): Promise<boolean> {
+	if (!isNative() || askedBefore()) return false;
+	try {
+		return (await pushPermission()) === "prompt";
+	} catch {
+		return false;
+	}
+}
+
+/** "Not now" on the in-app offer: don't offer again. */
+export function declinePushInContext(): void {
+	if (isNative()) rememberAsked();
+}
+
+/**
+ * "Turn on" on the in-app offer: show the system dialog (if the OS still
+ * hasn't been asked) and register this device. Remembers the offer was
+ * answered once the system dialog has had its say; a failure before that
+ * leaves it to be offered again. Never throws.
+ */
+export async function askForPushInContext(): Promise<PushOutcome> {
+	if (!isNative()) return "unsupported";
+	const outcome = await enablePush().catch((): PushOutcome => "failed");
+	if (outcome !== "failed" && outcome !== "unsupported") rememberAsked();
+	return outcome;
+}
+
+/**
+ * Sign out in the app: unregister this device (best effort, while the bearer
+ * is still attached), end the session, then forget the session token and the
+ * push token.
+ */
 export async function nativeSignOut(): Promise<void> {
-	const token = pushToken;
-	pushToken = null;
-	if (token) await nativePost("/push/devices/unregister", { token }).catch(() => undefined);
+	const token = await storedPushToken();
+	if (token && (await getNativeToken())) {
+		try {
+			const res = await nativePost("/push/devices/unregister", { token });
+			if (!res.ok) throw new PushRegisterError(res.status);
+		} catch (err) {
+			warnPush("unregistering this device", err);
+		}
+	}
 	await nativePost("/auth/logout", {}).catch(() => undefined);
 	await clearNativeToken();
+	await rememberPushToken(null);
 }

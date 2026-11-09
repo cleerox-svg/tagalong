@@ -5,7 +5,7 @@ import { BackLink, ErrorCard } from "./ErrorCard.js";
 import { linkTo } from "./router.js";
 import { ConfirmDialog, PersonActions, useSafetyGate } from "./SafetyActions.js";
 import { useMe } from "./TagalongGate.js";
-import { askForPushInContext } from "./native.js";
+import { PushOffer, usePushOffer } from "./PushOffer.js";
 
 const errText = (err: unknown) =>
 	err instanceof ApiError ? err.message : "That didn't go through. Try again.";
@@ -33,6 +33,7 @@ export function Connections() {
 		{ kind: "close"; c: Connection } | { kind: "optout" } | null
 	>(null);
 	const gate = useSafetyGate();
+	const push = usePushOffer();
 
 	const load = useCallback(async () => {
 		try {
@@ -136,7 +137,7 @@ export function Connections() {
 											.run(() =>
 												act(c.id, async () => {
 													const res = await api.acceptConnection(c.id);
-													askForPushInContext();
+													push.offer();
 													return res;
 												}),
 											)
@@ -158,6 +159,7 @@ export function Connections() {
 						</li>
 					))}
 				</ul>
+				<PushOffer state={push} question="Get a notification when they message you?" />
 			</section>
 
 			<section className="card">
