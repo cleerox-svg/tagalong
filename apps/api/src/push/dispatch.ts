@@ -49,8 +49,12 @@ export const THROTTLE_MS = 5 * 60_000;
 export const MAX_RECIPIENTS = 50;
 /** Newest active devices tried per recipient. */
 export const MAX_DEVICES_PER_RECIPIENT = 3;
-/** Device sends per event, in total (bounds subrequests). */
-export const MAX_SENDS = 50;
+/**
+ * Device sends per event, in total (bounds subrequests). 49, not 50: on a cold
+ * isolate the OAuth token fetch is one more subrequest, and token + 49 sends
+ * stays within the free plan's 50-subrequest limit per invocation.
+ */
+export const MAX_SENDS = 49;
 /** Names in a notification are cut to this many characters. */
 const NAME_MAX = 60;
 

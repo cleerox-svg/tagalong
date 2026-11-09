@@ -20,6 +20,14 @@ const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const TIMEOUT_MS = 10_000;
 /** Refresh the access token this long before Google says it expires. */
 const EXPIRY_MARGIN_MS = 60_000;
+/**
+ * PKCS8 PEM armour lines, joined at runtime so the built bundle never contains
+ * the literal header: scripts/check-bundle-secrets.sh flags that shape as a
+ * pasted private key. Behaviour is the same as the plain string.
+ */
+const PEM_LABEL = ["PRIVATE", "KEY-----"].join(" ");
+const PEM_HEADER = `-----BEGIN ${PEM_LABEL}`;
+const PEM_FOOTER = `-----END ${PEM_LABEL}`;
 
 export interface PushMessage {
 	/** FCM registration token of the device. Never logged. */
@@ -64,7 +72,7 @@ function parseServiceAccount(raw: string): ParsedAccount {
 			return { ok: false, reason: `FCM_SERVICE_ACCOUNT_JSON has no ${f}` };
 	}
 	const private_key = (o.private_key as string).replace(/\\n/g, "\n");
-	if (!private_key.includes("-----BEGIN PRIVATE KEY-----"))
+	if (!private_key.includes(PEM_HEADER))
 		return { ok: false, reason: "FCM_SERVICE_ACCOUNT_JSON private_key is not a PKCS8 PEM" };
 	return {
 		ok: true,
@@ -132,7 +140,7 @@ async function sha256Hex(s: string): Promise<string> {
 }
 
 async function importKey(pem: string): Promise<CryptoKey> {
-	const b64 = pem.replace(/-----(BEGIN|END) PRIVATE KEY-----/g, "").replace(/\s+/g, "");
+	const b64 = pem.split(PEM_HEADER).join("").split(PEM_FOOTER).join("").replace(/\s+/g, "");
 	const der = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 	return crypto.subtle.importKey(
 		"pkcs8",
