@@ -3,7 +3,7 @@ import { pinnedEvent, TripRequestSchema } from "@tagalong/shared";
 import { z } from "zod";
 import { requireAdult, requireUser } from "../auth/session.js";
 import { ProviderError } from "../lib/cache.js";
-import { HttpError, newId, readJson, type AppEnv } from "../lib/http.js";
+import { HttpError, LIVE_USER, newId, readJson, signedOut, type AppEnv } from "../lib/http.js";
 import { rateLimit } from "../lib/rate-limit.js";
 import { requireTrustedWrite } from "../lib/security.js";
 import { parseTripText } from "../providers/anthropic.js";
@@ -78,12 +78,15 @@ plans.post("/plans", ...signedIn, requireAdult, async (c) => {
 
 	const tripId = newId();
 	const planId = newId();
-	await c.env.DB.batch([
+	// Both inserts are guarded in SQL (the account still exists; the plan's
+	// trip request was just written), so a request racing an account deletion
+	// writes nothing.
+	const [trip] = await c.env.DB.batch([
 		c.env.DB.prepare(
 			`INSERT INTO trip_requests (id, user_id, raw_text, origin_city, origin_lat, origin_lng, origin_country,
 			   event_query, event_city, event_pinned_id, event_pinned_provider, event_url, event_manual, date_from, date_to,
 			   party_size, budget_minor, budget_currency, budget_scope, prefs_json)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${LIVE_USER}`,
 		).bind(
 			tripId,
 			c.get("userId"),
@@ -105,11 +108,15 @@ plans.post("/plans", ...signedIn, requireAdult, async (c) => {
 			r.budget.currency,
 			r.budget.scope,
 			JSON.stringify(r.prefs),
+			c.get("userId"),
 		),
 		c.env.DB.prepare(
-			"INSERT INTO plans (id, user_id, trip_request_id, status, progress) VALUES (?, ?, ?, 'queued', 'Starting…')",
-		).bind(planId, c.get("userId"), tripId),
+			`INSERT INTO plans (id, user_id, trip_request_id, status, progress)
+			 SELECT ?, ?, ?, 'queued', 'Starting…'
+			 WHERE EXISTS (SELECT 1 FROM trip_requests WHERE id = ? AND user_id = ?)`,
+		).bind(planId, c.get("userId"), tripId, tripId, c.get("userId")),
 	]);
+	if (!trip?.meta.changes) throw signedOut();
 
 	c.executionCtx.waitUntil(runPlan(c.env, planId));
 	return c.json({ id: planId, status: "queued" }, 202);
@@ -132,12 +139,13 @@ plans.post("/plans/:id/recheck", ...signedIn, requireAdult, async (c) => {
 	await rateLimit(c.env.DB, `plan:${c.get("userId")}`, 20, 3600);
 
 	const planId = newId();
-	await c.env.DB.prepare(
+	const res = await c.env.DB.prepare(
 		`INSERT INTO plans (id, user_id, trip_request_id, status, progress, rechecked_from)
-		 VALUES (?, ?, ?, 'queued', 'Re-checking prices…', ?)`,
+		 SELECT ?, ?, ?, 'queued', 'Re-checking prices…', ? WHERE ${LIVE_USER}`,
 	)
-		.bind(planId, c.get("userId"), prev.trip_request_id, prev.id)
+		.bind(planId, c.get("userId"), prev.trip_request_id, prev.id, c.get("userId"))
 		.run();
+	if (!res.meta.changes) throw signedOut();
 	c.executionCtx.waitUntil(runPlan(c.env, planId, { fresh: true }));
 	return c.json({ id: planId, status: "queued" }, 202);
 });

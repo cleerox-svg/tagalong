@@ -13,6 +13,7 @@
  */
 import { z } from "zod";
 import { HttpError } from "../lib/http.js";
+import { timingSafeEqualStr } from "./native.js";
 import { b64url, fromB64url, secret } from "./session.js";
 
 export const APPLE_ISSUER = "https://appleid.apple.com";
@@ -229,12 +230,6 @@ function decodePart(part: string | undefined): unknown {
 	}
 }
 
-function sameString(a: string, b: string): boolean {
-	const x = enc.encode(a);
-	const y = enc.encode(b);
-	return x.byteLength === y.byteLength && crypto.subtle.timingSafeEqual(x, y);
-}
-
 /**
  * Verifies an Apple id_token: RS256 signature by a current Apple key, issuer,
  * audience (our Services ID), expiry and our nonce. Returns its claims.
@@ -282,7 +277,7 @@ export async function verifyAppleIdToken(
 		!auds.includes(audience) ||
 		c.exp * 1000 < Date.now() ||
 		c.nonce === undefined ||
-		!sameString(c.nonce, nonce)
+		!timingSafeEqualStr(c.nonce, nonce)
 	)
 		throw badToken();
 	return c;

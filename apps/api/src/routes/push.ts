@@ -16,7 +16,15 @@ import {
 	type NotificationPrefs,
 } from "@tagalong/shared";
 import { requireUser } from "../auth/session.js";
-import { invalidInput, newId, nowIso, readJson, type AppEnv } from "../lib/http.js";
+import {
+	invalidInput,
+	LIVE_USER,
+	newId,
+	nowIso,
+	readJson,
+	signedOut,
+	type AppEnv,
+} from "../lib/http.js";
 import { rateLimit } from "../lib/rate-limit.js";
 import { requireTrustedWrite } from "../lib/security.js";
 
@@ -33,14 +41,15 @@ push.post("/push/devices", ...signedIn, async (c) => {
 	if (!body.success) throw invalidInput(body.error.issues, "Send { platform, token }.");
 	await rateLimit(c.env.DB, `push-device:${me}`, 30, 3600);
 	const now = nowIso();
-	await c.env.DB.batch([
+	// Guarded in SQL: an account deleted mid-request gets no device row.
+	const [reg] = await c.env.DB.batch([
 		c.env.DB.prepare(
 			`INSERT INTO push_devices (id, user_id, platform, token, created_at, last_seen_at)
-			 VALUES (?, ?, ?, ?, ?, ?)
+			 SELECT ?, ?, ?, ?, ?, ? WHERE ${LIVE_USER}
 			 ON CONFLICT (token) DO UPDATE SET user_id = excluded.user_id,
 			   platform = excluded.platform, last_seen_at = excluded.last_seen_at,
 			   disabled_at = NULL, last_error = NULL`,
-		).bind(newId(), me, body.data.platform, body.data.token, now, now),
+		).bind(newId(), me, body.data.platform, body.data.token, now, now, me),
 		c.env.DB.prepare(
 			`UPDATE push_devices SET disabled_at = ?, last_error = 'device_limit'
 			 WHERE user_id = ? AND disabled_at IS NULL AND id NOT IN (
@@ -48,6 +57,7 @@ push.post("/push/devices", ...signedIn, async (c) => {
 			   ORDER BY last_seen_at DESC, id DESC LIMIT ?)`,
 		).bind(now, me, me, MAX_ACTIVE_DEVICES),
 	]);
+	if (!reg?.meta.changes) throw signedOut();
 	return c.body(null, 204);
 });
 
@@ -103,11 +113,12 @@ push.post("/me/notifications", ...signedIn, async (c) => {
 	const updateBits = NOTIFICATION_KINDS.map((k) => bit(u[k]));
 	const row = await c.env.DB.prepare(
 		`INSERT INTO notification_prefs (user_id, ${PREF_COLUMNS}, updated_at)
-		 VALUES (?, ${NOTIFICATION_KINDS.map(() => "?").join(", ")}, ?)
+		 SELECT ?, ${NOTIFICATION_KINDS.map(() => "?").join(", ")}, ? WHERE ${LIVE_USER}
 		 ON CONFLICT (user_id) DO UPDATE SET ${PREF_UPDATES}, updated_at = excluded.updated_at
 		 RETURNING ${PREF_COLUMNS}`,
 	)
-		.bind(c.get("userId"), ...insertBits, nowIso(), ...updateBits)
+		.bind(c.get("userId"), ...insertBits, nowIso(), c.get("userId"), ...updateBits)
 		.first<PrefsRow>();
+	if (!row) throw signedOut();
 	return c.json(toPrefs(row));
 });

@@ -11,14 +11,60 @@ import { linkTo } from "./router.js";
 
 export const APP_CALLBACK_PATH = "/auth/app-callback";
 
+/** Error codes the API may send here, each with a short, fixed reason. */
+const KNOWN_ERRORS = {
+	cancelled: "Sign-in was cancelled.",
+	bad_state: "The sign-in took too long or was started somewhere else.",
+	bad_request: "The sign-in request wasn't valid.",
+	misconfigured: "Sign-in isn't available right now.",
+	rate_limited: "There were too many sign-in attempts. Wait a minute first.",
+	internal: "Something went wrong on our side.",
+	google_token_failed: "Google didn't confirm the sign-in.",
+	google_bad_token: "Google didn't confirm the sign-in.",
+	apple_failed: "Apple didn't confirm the sign-in.",
+} as const;
+
+export type AppCallbackErrorCode = keyof typeof KNOWN_ERRORS;
+
 /**
- * Drop the query and fragment (the code or error) from the address bar and
+ * What the callback URL said, captured before it is stripped: no error,
+ * a known error code, or "generic" for any error we don't recognise. The raw
+ * parameter value is never kept.
+ */
+export type AppCallbackOutcome =
+	{ error: false } | { error: true; code: AppCallbackErrorCode | "generic" };
+
+let outcome: AppCallbackOutcome = { error: false };
+
+/** The outcome captured by the last `stripAppCallbackParams()` that saw params. */
+export function appCallbackOutcome(): AppCallbackOutcome {
+	return outcome;
+}
+
+/** A short, fixed reason for a known code; null for "generic". */
+export function appCallbackErrorReason(code: AppCallbackErrorCode | "generic"): string | null {
+	return code === "generic" ? null : KNOWN_ERRORS[code];
+}
+
+function readOutcome(search: string, hash: string): AppCallbackOutcome {
+	const params = new URLSearchParams(search);
+	let raw = params.get("error");
+	if (raw === null && hash.length > 1) raw = new URLSearchParams(hash.slice(1)).get("error");
+	if (raw === null) return { error: false };
+	const code = Object.hasOwn(KNOWN_ERRORS, raw) ? (raw as AppCallbackErrorCode) : "generic";
+	return { error: true, code };
+}
+
+/**
+ * Note whether the callback carried an error (allowlisted codes only), then
+ * drop the query and fragment (the code or error) from the address bar and
  * the history entry. Idempotent; a no-op on any other path.
  */
 export function stripAppCallbackParams(): void {
 	try {
 		const { pathname, search, hash } = window.location;
 		if (pathname !== APP_CALLBACK_PATH || (search === "" && hash === "")) return;
+		outcome = readOutcome(search, hash);
 		window.history.replaceState(null, "", pathname);
 	} catch {
 		// No history API: nothing kept to strip.
@@ -28,9 +74,26 @@ export function stripAppCallbackParams(): void {
 export function AppCallback() {
 	// Before paint as well as in main.tsx, in case we got here some other way.
 	useLayoutEffect(stripAppCallbackParams, []);
+	const result = appCallbackOutcome();
+	if (result.error) {
+		const reason = appCallbackErrorReason(result.code);
+		return (
+			<section className="card">
+				<h1>Sign-in didn't finish</h1>
+				<p>
+					{reason && <>{reason} </>}
+					Close this page and try again in the Budgetrip app.
+				</p>
+				<p>Using Budgetrip in this browser instead? Sign in from the home page.</p>
+				<a className="button primary" href="/" onClick={linkTo("/")}>
+					Go to the home page
+				</a>
+			</section>
+		);
+	}
 	return (
 		<section className="card">
-			<h1>Finish signing in in the Budgetrip app</h1>
+			<h1>Open the Budgetrip app to finish signing in</h1>
 			<p>
 				This sign-in link is meant for the Budgetrip app on your phone. Go back to the app to finish
 				signing in. If the app didn't open, make sure it's installed and up to date, then start

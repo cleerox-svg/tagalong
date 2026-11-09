@@ -4,7 +4,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { requireUser } from "../auth/session.js";
-import { HttpError, nowIso, readJson, type AppEnv } from "../lib/http.js";
+import { HttpError, LIVE_USER, nowIso, readJson, signedOut, type AppEnv } from "../lib/http.js";
 import { rateLimit } from "../lib/rate-limit.js";
 import { requireTrustedWrite } from "../lib/security.js";
 import { newShareToken, SHARE_TOKEN_RE, shareUrl } from "../lib/share.js";
@@ -34,9 +34,9 @@ trips.post("/plans/:id/save", ...signedIn, async (c) => {
 	if (plan.status !== "done")
 		throw new HttpError(409, "not_ready", "Wait for the plan to finish first.");
 	const best = await cheapestTotal(c.env.DB, plan.id);
-	await c.env.DB.prepare(
+	const res = await c.env.DB.prepare(
 		`INSERT INTO saved_trips (user_id, plan_id, trip_request_id, latest_plan_id, best_total_minor, currency)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		 SELECT ?, ?, ?, ?, ?, ? WHERE ${LIVE_USER}
 		 ON CONFLICT (user_id, trip_request_id) DO UPDATE SET
 		   latest_plan_id = excluded.latest_plan_id,
 		   best_total_minor = CASE
@@ -44,8 +44,9 @@ trips.post("/plans/:id/save", ...signedIn, async (c) => {
 		     WHEN excluded.best_total_minor IS NULL THEN saved_trips.best_total_minor
 		     ELSE MIN(saved_trips.best_total_minor, excluded.best_total_minor) END`,
 	)
-		.bind(userId, plan.id, plan.trip_request_id, plan.id, best, plan.budget_currency)
+		.bind(userId, plan.id, plan.trip_request_id, plan.id, best, plan.budget_currency, userId)
 		.run();
+	if (!res.meta.changes) throw signedOut();
 	return c.json({ saved: true });
 });
 
@@ -160,9 +161,12 @@ trips.post("/plans/:id/share", ...signedIn, async (c) => {
 	if (existing) return c.json({ share_url: shareUrl(existing.token) });
 	await rateLimit(c.env.DB, `share:${userId}`, 30, 3600);
 	const token = newShareToken();
-	await c.env.DB.prepare("INSERT INTO share_links (token, plan_id, user_id) VALUES (?, ?, ?)")
-		.bind(token, plan.id, userId)
+	const res = await c.env.DB.prepare(
+		`INSERT INTO share_links (token, plan_id, user_id) SELECT ?, ?, ? WHERE ${LIVE_USER}`,
+	)
+		.bind(token, plan.id, userId, userId)
 		.run();
+	if (!res.meta.changes) throw signedOut();
 	return c.json({ share_url: shareUrl(token) }, 201);
 });
 

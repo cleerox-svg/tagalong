@@ -412,9 +412,31 @@ a {
 .nav a[aria-current="page"] {
 	font-weight: 700;
 }
+/* Sign out lives in the header on wider screens, on the Account page on narrow ones. */
+.account-signout {
+	display: none;
+	margin-top: 16px;
+	min-height: 44px;
+}
 @media (max-width: 420px) {
 	.who-name {
 		display: none;
+	}
+	/* At 360px: My trips, Tagalong, Notifications and Account on one row,
+	   Moderation (moderators only) on a second. Targets stay 44px tall. */
+	.who {
+		gap: 0;
+	}
+	.nav {
+		gap: 0 10px;
+		font-size: 0.9375rem;
+	}
+	.header-signout {
+		display: none;
+	}
+	.account-signout {
+		display: inline-flex;
+		align-items: center;
 	}
 }
 
@@ -429,6 +451,14 @@ a {
 	color: var(--danger-ink);
 	border-color: var(--danger-bg);
 	font-weight: 600;
+}
+/* Not yet usable: outlined instead of faded, so the label keeps AA contrast
+   (--error on --card is >= 4.5:1 in light and dark). */
+.danger[aria-disabled="true"] {
+	opacity: 1;
+	background: transparent;
+	color: var(--error);
+	border-color: var(--error);
 }
 
 /* ---- Tagalong ---- */
@@ -782,6 +812,19 @@ a {
 	color: #ffffff;
 	border-color: #000000;
 	font-family: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, sans-serif;
+}
+.google-logo {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 4px;
+	background: #ffffff;
+}
+.google-logo svg {
+	display: block;
 }
 .apple-logo {
 	flex: none;

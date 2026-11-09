@@ -8,6 +8,7 @@ import {
 } from "@tagalong/shared";
 import { z } from "zod";
 import { HttpError, newId, nowIso, readJson, type AppEnv } from "../lib/http.js";
+import { rateLimit } from "../lib/rate-limit.js";
 import { requireTrustedWrite, WEB_ORIGINS } from "../lib/security.js";
 import {
 	isModerator,
@@ -30,6 +31,7 @@ import {
 	timingSafeEqualStr,
 } from "./native.js";
 import { endSession, requireUser, secret, startSession } from "./session.js";
+import { identityHash, isRealGoogleSub, SUSPENDED_AT_FOR_HASH } from "./suspended-identity.js";
 
 const OAUTH_COOKIE = "tg_oauth";
 /**
@@ -76,16 +78,41 @@ type OAuthState = { state: string; returnTo: string; native?: true; codeChalleng
  */
 const NATIVE_STATE_PREFIX = "n.";
 
+/** Sign-in requests per IP per minute, per endpoint (start and callback, each provider). */
+const SIGN_IN_LIMIT = 20;
+
+/**
+ * Per-IP limit on a sign-in endpoint. Web: throws the 429. Native: returns the
+ * error interstitial (error=rate_limited), since the app only ever sees the
+ * fixed callback URL. Null when under the limit.
+ */
+async function signInLimit(
+	c: Context<AppEnv>,
+	endpoint: string,
+	isNative: boolean,
+): Promise<Response | null> {
+	const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
+	try {
+		await rateLimit(c.env.DB, `signin:${endpoint}:${ip}`, SIGN_IN_LIMIT, 60);
+		return null;
+	} catch (err) {
+		if (isNative && err instanceof HttpError && err.code === "rate_limited")
+			return nativeErrorPage(c, "rate_limited");
+		throw err;
+	}
+}
+
 auth.get("/auth/google/start", async (c) => {
+	const isNative = c.req.query("native") === "1";
+	const limited = await signInLimit(c, "google-start", isNative);
+	if (limited) return limited;
 	if (!c.env.GOOGLE_CLIENT_ID)
 		throw new HttpError(500, "misconfigured", "Sign-in is not configured.");
-	const isNative = c.req.query("native") === "1";
 	const state = isNative ? `${NATIVE_STATE_PREFIX}${newId()}` : newId();
 	const saved: OAuthState = { state, returnTo: safeReturn(c.req.query("return_to")) };
 	if (isNative) {
 		const challenge = c.req.query("code_challenge") ?? "";
-		if (!CODE_CHALLENGE_RE.test(challenge))
-			return c.redirect(nativeRedirect({ error: "bad_request" }), 302);
+		if (!CODE_CHALLENGE_RE.test(challenge)) return nativeErrorPage(c, "bad_request");
 		saved.native = true;
 		saved.codeChallenge = challenge;
 	}
@@ -162,12 +189,21 @@ async function googleUser(c: Context<AppEnv>, code: string): Promise<SignedInUse
 	}
 
 	const { sub, email, name } = claims.data;
+	// A new row inherits a suspension kept from a deleted account with the same
+	// identity (suspended_identities); the conflict UPDATE never touches it.
 	const user = await c.env.DB.prepare(
-		`INSERT INTO users (id, google_sub, email, display_name) VALUES (?, ?, ?, ?)
+		`INSERT INTO users (id, google_sub, email, display_name, tagalong_suspended_at)
+		 VALUES (?, ?, ?, ?, ${SUSPENDED_AT_FOR_HASH})
 		 ON CONFLICT (google_sub) DO UPDATE SET email = excluded.email
 		 RETURNING id`,
 	)
-		.bind(newId(), sub, email, (name ?? email.split("@")[0] ?? "Traveller").slice(0, 80))
+		.bind(
+			newId(),
+			sub,
+			email,
+			(name ?? email.split("@")[0] ?? "Traveller").slice(0, 80),
+			await identityHash(c.env, "google", sub),
+		)
 		.first<{ id: string }>();
 	if (!user) throw new HttpError(500, "internal", "Could not save your account.");
 	return { id: user.id, label: email };
@@ -178,6 +214,40 @@ const escapeHtml = (s: string) =>
 		/[&<>"']/g,
 		(ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] ?? ch,
 	);
+
+/** Strict headers for the native interstitials: a static page, nothing to load. */
+const INTERSTITIAL_HEADERS = {
+	"Content-Security-Policy":
+		"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+	"Cache-Control": "no-store",
+	"Referrer-Policy": "no-referrer",
+	"X-Frame-Options": "DENY",
+	"X-Content-Type-Options": "nosniff",
+} as const;
+
+/** Both interstitials: one heading, one message, one button to `href` (already escaped). */
+function interstitialHtml(o: { title: string; heading: string; body: string; href: string; button: string }) {
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${o.title}</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;line-height:1.5;color:#111}
+a.button{display:inline-block;padding:.75rem 1.25rem;border-radius:.5rem;background:#0f766e;color:#fff;text-decoration:none;font-weight:600}
+p.note{color:#555;font-size:.9rem}
+</style>
+</head>
+<body>
+<h1>${o.heading}</h1>
+${o.body}<p><a class="button" href="${o.href}">${o.button}</a></p>
+<p class="note">If the app doesn't open, make sure Budgetrip is installed, then try again from the app.</p>
+<p class="note">If you didn't start signing in to the Budgetrip app, close this page.</p>
+</body>
+</html>
+`;
+}
 
 /**
  * A successful native sign-in shows who signed in and a single "Open
@@ -190,34 +260,46 @@ const escapeHtml = (s: string) =>
  * the web app's /auth/app-callback page instead.
  */
 function nativeInterstitial(c: Context<AppEnv>, who: string, appCode: string): Response {
-	const href = escapeHtml(nativeRedirect({ code: appCode }));
-	const html = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Open Budgetrip</title>
-<style>
-body{font-family:system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;line-height:1.5;color:#111}
-a.button{display:inline-block;padding:.75rem 1.25rem;border-radius:.5rem;background:#0b5fff;color:#fff;text-decoration:none;font-weight:600}
-p.note{color:#555;font-size:.9rem}
-</style>
-</head>
-<body>
-<h1>Signed in as ${escapeHtml(who)}</h1>
-<p><a class="button" href="${href}">Open Budgetrip</a></p>
-<p class="note">If you didn't start signing in to the Budgetrip app, close this page.</p>
-</body>
-</html>
-`;
-	return c.html(html, 200, {
-		"Content-Security-Policy":
-			"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-		"Cache-Control": "no-store",
-		"Referrer-Policy": "no-referrer",
-		"X-Frame-Options": "DENY",
-		"X-Content-Type-Options": "nosniff",
+	const html = interstitialHtml({
+		title: "Open Budgetrip",
+		heading: `Signed in as ${escapeHtml(who)}`,
+		body: "",
+		href: escapeHtml(nativeRedirect({ code: appCode })),
+		button: "Open Budgetrip",
 	});
+	return c.html(html, 200, INTERSTITIAL_HEADERS);
+}
+
+/** Why a native sign-in didn't finish, by error code. Fixed copy; never request text. */
+const NATIVE_ERROR_REASONS: Record<string, string> = {
+	bad_state: "the sign-in expired or was started elsewhere",
+	cancelled: "it was cancelled",
+	bad_request: "the app's request was incomplete",
+	misconfigured: "this sign-in option isn't set up yet",
+	rate_limited: "there were too many attempts, so wait a minute",
+	account_deleted: "that account has been deleted",
+	google_bad_token: "the account could not be verified",
+	apple_bad_token: "the account could not be verified",
+};
+
+/**
+ * A native sign-in that failed: the same interstitial as success (same
+ * reason: a tap on a cross-domain link is what opens the app), with the
+ * reason and a "Return to Budgetrip" link to NATIVE_CALLBACK?error=<code>.
+ * The code is a fixed server-side constant (an HttpError code), never
+ * request input, and is reduced to [a-z_] anyway.
+ */
+function nativeErrorPage(c: Context<AppEnv>, error: string): Response {
+	const code = /^[a-z_]{1,40}$/.test(error) ? error : "internal";
+	const reason = NATIVE_ERROR_REASONS[code] ?? "something went wrong";
+	const html = interstitialHtml({
+		title: "Sign-in didn't finish",
+		heading: "Sign-in didn't finish",
+		body: `<p>Sign-in didn't finish — ${escapeHtml(reason)}. Return to Budgetrip and try again.</p>\n`,
+		href: escapeHtml(nativeRedirect({ error: code })),
+		button: "Return to Budgetrip",
+	});
+	return c.html(html, 200, INTERSTITIAL_HEADERS);
 }
 
 /** Who a provider signed in: our user id and what to show as "Signed in as". */
@@ -229,8 +311,9 @@ interface SignedInUser {
 /**
  * The end of every provider's callback, once its state check passed.
  * Native: resolve the user, mint a one-time app code and show the interstitial;
- * any failure goes back to the app's fixed URL as a short error code (the web
- * session cookie is never set on this path). Web: start the cookie session and
+ * any failure shows the error interstitial, whose link goes back to the app's
+ * fixed URL with a short error code (the web session cookie is never set on
+ * this path). Web: start the cookie session and
  * redirect to the (already validated) returnTo with `webStatus` (Google's GET
  * callback keeps 302; Apple's POST callback uses 303 so the browser GETs).
  */
@@ -247,8 +330,7 @@ async function completeSignIn(
 			return nativeInterstitial(c, user.label, appCode);
 		} catch (err) {
 			if (!(err instanceof HttpError)) console.error("native sign-in failed", err);
-			const error = err instanceof HttpError ? err.code : "internal";
-			return c.redirect(nativeRedirect({ error }), webStatus);
+			return nativeErrorPage(c, err instanceof HttpError ? err.code : "internal");
 		}
 	}
 	await startSession(c, (await resolveUser()).id);
@@ -261,19 +343,24 @@ auth.get("/auth/google/callback", async (c) => {
 	const saved = raw ? (JSON.parse(raw) as OAuthState) : null;
 	const state = c.req.query("state");
 	const code = c.req.query("code");
+	const limited = await signInLimit(
+		c,
+		"google-callback",
+		!!saved?.native || !!state?.startsWith(NATIVE_STATE_PREFIX),
+	);
+	if (limited) return limited;
 
 	if (saved?.native && saved.codeChallenge) {
-		// Native: always back to the app's fixed URL, with a code or a short error.
-		// The web session cookie is never set on this path.
-		if (!state || state !== saved.state)
-			return c.redirect(nativeRedirect({ error: "bad_state" }), 302);
-		if (!code) return c.redirect(nativeRedirect({ error: "cancelled" }), 302);
+		// Native: always the interstitial, linking back to the app's fixed URL
+		// with a code or a short error. The web session cookie is never set here.
+		if (!state || state !== saved.state) return nativeErrorPage(c, "bad_state");
+		if (!code) return nativeErrorPage(c, "cancelled");
 		return completeSignIn(c, saved, () => googleUser(c, code), 302);
 	}
 
 	// A native flow whose cookie was lost: back to the app (fixed URL), not JSON.
 	if (!saved?.native && state?.startsWith(NATIVE_STATE_PREFIX))
-		return c.redirect(nativeRedirect({ error: "bad_state" }), 302);
+		return nativeErrorPage(c, "bad_state");
 	if (!saved || !state || state !== saved.state) {
 		throw new HttpError(400, "bad_state", "Sign-in expired or was started elsewhere. Try again.");
 	}
@@ -299,9 +386,11 @@ const appleCookieOpts = {
 
 auth.get("/auth/apple/start", async (c) => {
 	const isNative = c.req.query("native") === "1";
+	const limited = await signInLimit(c, "apple-start", isNative);
+	if (limited) return limited;
 	const cfg = appleConfig(c.env);
 	if (!cfg || !c.env.SESSION_SECRET || c.env.SESSION_SECRET.length < 32) {
-		if (isNative) return c.redirect(nativeRedirect({ error: "misconfigured" }), 302);
+		if (isNative) return nativeErrorPage(c, "misconfigured");
 		throw new HttpError(500, "misconfigured", "Sign in with Apple is not configured.");
 	}
 	const state = isNative ? `${NATIVE_STATE_PREFIX}${newId()}` : newId();
@@ -312,8 +401,7 @@ auth.get("/auth/apple/start", async (c) => {
 	};
 	if (isNative) {
 		const challenge = c.req.query("code_challenge") ?? "";
-		if (!CODE_CHALLENGE_RE.test(challenge))
-			return c.redirect(nativeRedirect({ error: "bad_request" }), 302);
+		if (!CODE_CHALLENGE_RE.test(challenge)) return nativeErrorPage(c, "bad_request");
 		saved.native = true;
 		saved.codeChallenge = challenge;
 	}
@@ -393,21 +481,33 @@ async function appleUser(
 	const tokens = await exchangeAppleCode(cfg, code, appleRedirectUri(c.req.url));
 	const claims = await verifyAppleIdToken(tokens.id_token, cfg.servicesId, nonce);
 	// Apple vouches for the address it puts in the id_token (a real one or a
-	// private relay); an unverified one is not stored.
-	const email = claims.email && claims.email_verified !== false ? claims.email : "";
+	// private relay) only when email_verified says so (true or "true"); a
+	// missing or false flag means the address is not stored.
+	const email = claims.email && claims.email_verified === true ? claims.email : "";
 	const rtEnc = tokens.refresh_token
 		? await encryptRefreshToken(c.env, tokens.refresh_token)
 		: null;
+	// A new row inherits a suspension kept from a deleted account with the same
+	// Apple ID (suspended_identities); the conflict UPDATE never touches it.
 	const user = await c.env.DB.prepare(
-		`INSERT INTO users (id, google_sub, apple_sub, email, display_name, apple_refresh_token_enc)
-		 VALUES (?1, 'apple:' || ?2, ?2, ?3, ?4, ?5)
+		`INSERT INTO users (id, google_sub, apple_sub, email, display_name, apple_refresh_token_enc,
+		   tagalong_suspended_at)
+		 VALUES (?1, 'apple:' || ?2, ?2, ?3, ?4, ?5,
+		   (SELECT suspended_at FROM suspended_identities WHERE id_hash = ?6))
 		 ON CONFLICT (apple_sub) DO UPDATE SET
 		   email = CASE WHEN excluded.email <> '' THEN excluded.email ELSE users.email END,
 		   apple_refresh_token_enc = COALESCE(excluded.apple_refresh_token_enc, users.apple_refresh_token_enc)
 		 WHERE users.deleted_at IS NULL
 		 RETURNING id, email, display_name`,
 	)
-		.bind(newId(), claims.sub, email, appleNameHint(userJson) ?? "Traveller", rtEnc)
+		.bind(
+			newId(),
+			claims.sub,
+			email,
+			appleNameHint(userJson) ?? "Traveller",
+			rtEnc,
+			await identityHash(c.env, "apple", claims.sub),
+		)
 		.first<{ id: string; email: string; display_name: string }>();
 	if (!user) throw new HttpError(401, "account_deleted", "That account has been deleted.");
 	return { id: user.id, label: user.email || user.display_name };
@@ -436,14 +536,20 @@ auth.post("/auth/apple/callback", async (c) => {
 	const code = field(form.code);
 	const error = field(form.error);
 	const stateOk = !!saved && !!state && timingSafeEqualStr(state, saved.state);
+	const limited = await signInLimit(
+		c,
+		"apple-callback",
+		!!saved?.native || !!state?.startsWith(NATIVE_STATE_PREFIX),
+	);
+	if (limited) return limited;
 
 	if (saved?.native && saved.codeChallenge) {
-		if (!stateOk) return c.redirect(nativeRedirect({ error: "bad_state" }), 303);
-		if (error || !code) return c.redirect(nativeRedirect({ error: "cancelled" }), 303);
+		if (!stateOk) return nativeErrorPage(c, "bad_state");
+		if (error || !code) return nativeErrorPage(c, "cancelled");
 		return completeSignIn(c, saved, () => appleUser(c, code, saved.nonce, field(form.user)), 303);
 	}
 	if (!saved?.native && state?.startsWith(NATIVE_STATE_PREFIX))
-		return c.redirect(nativeRedirect({ error: "bad_state" }), 303);
+		return nativeErrorPage(c, "bad_state");
 	if (!saved || !stateOk) {
 		throw new HttpError(400, "bad_state", "Sign-in expired or was started elsewhere. Try again.");
 	}
@@ -463,8 +569,7 @@ auth.post("/auth/logout", requireTrustedWrite, (c) => {
  */
 function signInProviders(u: { google_sub: string; apple_sub: string | null }): AuthProvider[] {
 	const out: AuthProvider[] = [];
-	if (!u.google_sub.startsWith("apple:") && !u.google_sub.startsWith("deleted:"))
-		out.push("google");
+	if (isRealGoogleSub(u.google_sub)) out.push("google");
 	if (u.apple_sub !== null) out.push("apple");
 	return out;
 }

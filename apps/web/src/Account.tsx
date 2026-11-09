@@ -8,11 +8,21 @@ import {
 	deleteErrorMessage,
 	isDeleteConfirmed,
 	providersLabel,
+	signedInAs,
 } from "./account.js";
 import { api, type Me } from "./api.js";
 import { Modal } from "./SafetyActions.js";
 
-export function Account({ me, onDeleted }: { me: Me; onDeleted: () => Promise<void> }) {
+export function Account({
+	me,
+	onDeleted,
+	onSignOut,
+}: {
+	me: Me;
+	onDeleted: () => Promise<void>;
+	/** Shown here on narrow screens only; the header has it otherwise. */
+	onSignOut: () => Promise<void>;
+}) {
 	const id = useId();
 	const [typed, setTyped] = useState("");
 	const [hint, setHint] = useState(false);
@@ -28,7 +38,7 @@ export function Account({ me, onDeleted }: { me: Me; onDeleted: () => Promise<vo
 				<dl className="account-facts">
 					<div>
 						<dt>Signed in as</dt>
-						<dd className="account-email">{me.email}</dd>
+						<dd className="account-email">{signedInAs(me)}</dd>
 					</div>
 					{providers && (
 						<div>
@@ -37,6 +47,9 @@ export function Account({ me, onDeleted }: { me: Me; onDeleted: () => Promise<vo
 						</div>
 					)}
 				</dl>
+				<button type="button" className="account-signout" onClick={() => void onSignOut()}>
+					Sign out
+				</button>
 			</section>
 
 			<section className="card account-danger" aria-labelledby={`${id}-h`}>
@@ -130,8 +143,11 @@ function DeleteDialog({
 			}}
 		>
 			<p>
-				Your account and everything listed on this page is deleted straight away. You'll be signed
-				out on every device.
+				Your account and everything under 'What gets deleted' is removed straight away. You'll be
+				signed out on every device.
+			</p>
+			<p className="sr-only" role="status">
+				{busy ? "Deleting your account…" : ""}
 			</p>
 			{error && (
 				<p className="error" role="alert">

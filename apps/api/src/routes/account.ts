@@ -13,7 +13,9 @@
  *
  * Kept: the users row as a tombstone (every personal field cleared, shown to
  * others as "Deleted user"), reports by and against the user, and the
- * Tagalong suspension marker (so a suspension's record survives).
+ * Tagalong suspension marker (so a suspension's record survives). For a
+ * suspended account only, a keyed hash of each sign-in identity is kept in
+ * suspended_identities, so signing up again with it starts suspended.
  *
  * One D1 batch (a single transaction), so an interrupted request either did
  * all of it or nothing, and a retry by a still-signed-in user just runs it
@@ -23,6 +25,7 @@
 import { DeleteAccountRequestSchema } from "@tagalong/shared";
 import { Hono } from "hono";
 import { decryptRefreshToken, revokeApple } from "../auth/apple.js";
+import { accountIdentityHashes } from "../auth/suspended-identity.js";
 import { endSession, requireUser } from "../auth/session.js";
 import { deferOf } from "../chat/notify.js";
 import { HttpError, nowIso, readJson, type AppEnv } from "../lib/http.js";
@@ -47,10 +50,17 @@ account.post("/me/delete", requireTrustedWrite, requireUser, async (c) => {
 
 	// Revoke Sign in with Apple first (best effort; never blocks deletion).
 	const row = await db
-		.prepare("SELECT apple_refresh_token_enc AS rt FROM users WHERE id = ?")
+		.prepare(
+			"SELECT apple_refresh_token_enc AS rt, google_sub, apple_sub FROM users WHERE id = ?",
+		)
 		.bind(userId)
-		.first<{ rt: string | null }>();
-	if (row?.rt) {
+		.first<{ rt: string | null; google_sub: string; apple_sub: string | null }>();
+	if (!row) throw new HttpError(401, "signed_out", "Sign in first.");
+	// Keyed hashes of the account's sign-in identities, computed now because
+	// the batch below tombstones the subs. Stored only if the account is
+	// suspended (decided inside the batch, so a concurrent suspension counts).
+	const idHashes = await accountIdentityHashes(c.env, row);
+	if (row.rt) {
 		const token = await decryptRefreshToken(c.env, row.rt);
 		const revoked = token ? await revokeApple(c.env, token) : false;
 		if (!revoked) console.warn("account delete: Apple token not revoked", { userId });
@@ -123,6 +133,17 @@ account.post("/me/delete", requireTrustedWrite, requireUser, async (c) => {
 			del(`DELETE FROM plans WHERE user_id = ? OR trip_request_id IN (${myTrips})`, userId, userId),
 			del("DELETE FROM trip_requests WHERE user_id = ?", userId),
 			del("DELETE FROM blocks WHERE blocker_id = ? OR blocked_id = ?", userId, userId),
+			// A suspended account's identities, so signing up again stays suspended.
+			...idHashes.map((h) =>
+				db
+					.prepare(
+						`INSERT INTO suspended_identities (id_hash, suspended_at, created_at)
+						 SELECT ?, tagalong_suspended_at, ? FROM users
+						 WHERE id = ? AND tagalong_suspended_at IS NOT NULL
+						 ON CONFLICT (id_hash) DO NOTHING`,
+					)
+					.bind(h, now, userId),
+			),
 		],
 	);
 

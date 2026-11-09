@@ -4,7 +4,7 @@
  * No I/O, so it is unit-tested without a DOM.
  */
 import type { AuthProvider, DeleteAccountRequest } from "@tagalong/shared";
-import { ApiError } from "./api.js";
+import { ApiError, type Me } from "./api.js";
 
 /** The word the person types, and the API's literal `confirm` value. */
 export const DELETE_CONFIRM_WORD: DeleteAccountRequest["confirm"] = "DELETE";
@@ -39,4 +39,17 @@ export function providersLabel(providers: readonly AuthProvider[] | undefined): 
 	return names.length === 1
 		? (names[0] ?? null)
 		: `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/**
+ * Who "Signed in as" names: the email, else the display name. Apple can hide
+ * the email entirely, so say so rather than leave the person guessing.
+ */
+export function signedInAs(me: Pick<Me, "email" | "display_name" | "sign_in_providers">): string {
+	const email = me.email?.trim() ?? "";
+	if (email) return email;
+	const name = me.display_name?.trim() ?? "";
+	const appleHidden = me.sign_in_providers?.includes("apple") ?? false;
+	if (!appleHidden) return name;
+	return name ? `${name} (Apple ID, email hidden)` : "Apple ID, email hidden";
 }
