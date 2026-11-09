@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { DEFAULT_NOTIFICATION_PREFS, formatMoney } from "@tagalong/shared";
+import { issueBearer } from "../auth/session.js";
 import { dispatchPush } from "../push/dispatch.js";
 import {
 	call,
@@ -114,6 +115,124 @@ describe("notification prefs", () => {
 
 		expect((await postJson("/me/notifications", {}, a.cookie)).status).toBe(400);
 		expect((await postJson("/me/notifications", { nope: true }, a.cookie)).status).toBe(400);
+	});
+});
+
+describe("push routes: scoping and the device cap (test-engineer)", () => {
+	const bearerPost = (path: string, body: unknown, tok: string) =>
+		call(path, {
+			method: "POST",
+			headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+			body: JSON.stringify(body),
+		});
+
+	it("user B can't unregister A's device, by cookie or by bearer", async () => {
+		const a = await signedInUser();
+		const b = await signedInUser();
+		const t = token("scoped");
+		await postJson("/push/devices", { platform: "ios", token: t }, a.cookie);
+		const { token: bBearer } = await issueBearer(env, b.id);
+		expect((await bearerPost("/push/devices/unregister", { token: t }, bBearer)).status).toBe(204);
+		expect((await postJson("/push/devices/unregister", { token: t }, b.cookie)).status).toBe(204);
+		const row = await env.DB.prepare(
+			"SELECT user_id, disabled_at FROM push_devices WHERE token = ?",
+		)
+			.bind(t)
+			.first<{ user_id: string; disabled_at: string | null }>();
+		expect(row).toEqual({ user_id: a.id, disabled_at: null });
+		// Unknown token: same 204, nothing to probe.
+		expect(
+			(await postJson("/push/devices/unregister", { token: token("never") }, b.cookie)).status,
+		).toBe(204);
+	});
+
+	it("a prefs POST from another user doesn't change A's prefs", async () => {
+		const a = await signedInUser();
+		const b = await signedInUser();
+		await postJson("/me/notifications", { dm: false, price_drop: false }, a.cookie);
+		const wantA = { ...DEFAULT_NOTIFICATION_PREFS, dm: false, price_drop: false };
+
+		const { token: bBearer } = await issueBearer(env, b.id);
+		const byCookie = await postJson(
+			"/me/notifications",
+			{ dm: true, price_drop: true, group_message: true },
+			b.cookie,
+		);
+		expect(byCookie.status).toBe(200);
+		expect((await bearerPost("/me/notifications", { connection_request: false }, bBearer)).status).toBe(
+			200,
+		);
+		// Unknown fields (e.g. a user_id) are refused, not used to pick the target.
+		expect(
+			(await postJson("/me/notifications", { user_id: a.id, dm: true }, b.cookie)).status,
+		).toBe(400);
+
+		expect(await (await call("/me/notifications", { cookie: a.cookie })).json()).toEqual(wantA);
+		expect(await (await call("/me/notifications", { cookie: b.cookie })).json()).toEqual({
+			...DEFAULT_NOTIFICATION_PREFS,
+			dm: true,
+			price_drop: true,
+			group_message: true,
+			connection_request: false,
+		});
+	});
+
+	it("the 11th device disables the stalest one, never another user's, and re-registering revives it", async () => {
+		const a = await signedInUser();
+		const b = await signedInUser();
+		const bTok = token("b-own");
+		await postJson("/push/devices", { platform: "android", token: bTok }, b.cookie);
+
+		const toks = Array.from({ length: 10 }, (_, i) => token(`cap${i}`));
+		for (const t of toks) await postJson("/push/devices", { platform: "ios", token: t }, a.cookie);
+		// Deterministic ages: toks[0] is the stalest, toks[9] the freshest.
+		for (const [i, t] of toks.entries())
+			await env.DB.prepare("UPDATE push_devices SET last_seen_at = ? WHERE token = ?")
+				.bind(new Date(Date.now() - (100 - i) * 60_000).toISOString(), t)
+				.run();
+
+		const eleventh = token("cap10");
+		expect(
+			(await postJson("/push/devices", { platform: "ios", token: eleventh }, a.cookie)).status,
+		).toBe(204);
+		const state = async (t: string) =>
+			env.DB.prepare("SELECT user_id, disabled_at, last_error FROM push_devices WHERE token = ?")
+				.bind(t)
+				.first<{ user_id: string; disabled_at: string | null; last_error: string | null }>();
+		const stalest = await state(toks[0] ?? "");
+		expect(stalest?.disabled_at).not.toBeNull();
+		expect(stalest?.last_error).toBe("device_limit");
+		for (const t of [...toks.slice(1), eleventh]) expect((await state(t))?.disabled_at).toBeNull();
+		expect(await state(bTok)).toMatchObject({ user_id: b.id, disabled_at: null, last_error: null });
+
+		// Re-registering the disabled token revives it; the next-stalest (toks[1]) goes.
+		await postJson("/push/devices", { platform: "ios", token: toks[0] }, a.cookie);
+		expect(await state(toks[0] ?? "")).toMatchObject({ disabled_at: null, last_error: null });
+		expect((await state(toks[1] ?? ""))?.last_error).toBe("device_limit");
+		const active = await env.DB.prepare(
+			"SELECT COUNT(*) AS n FROM push_devices WHERE user_id = ? AND disabled_at IS NULL",
+		)
+			.bind(a.id)
+			.first<{ n: number }>();
+		expect(active?.n).toBe(10);
+	});
+
+	it("moving a token to B counts against B's cap, not A's", async () => {
+		const a = await signedInUser();
+		const b = await signedInUser();
+		const shared = token("moved");
+		await postJson("/push/devices", { platform: "ios", token: shared }, a.cookie);
+		await postJson("/push/devices", { platform: "ios", token: shared }, b.cookie);
+		const count = async (id: string) =>
+			(
+				await env.DB.prepare(
+					"SELECT COUNT(*) AS n FROM push_devices WHERE user_id = ? AND disabled_at IS NULL",
+				)
+					.bind(id)
+					.first<{ n: number }>()
+			)?.n;
+		expect(await count(a.id)).toBe(0);
+		expect(await count(b.id)).toBe(1);
 	});
 });
 
