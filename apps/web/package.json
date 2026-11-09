@@ -9,14 +9,25 @@
 		"lint": "tsc --noEmit -p tsconfig.json",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"test": "vitest run",
-		"deploy": "wrangler deploy"
+		"deploy": "wrangler deploy",
+		"cap:sync": "pnpm build && cap sync",
+		"cap:open:ios": "cap open ios",
+		"cap:open:android": "cap open android"
 	},
 	"dependencies": {
+		"@capacitor-firebase/messaging": "catalog:",
+		"@capacitor/app": "catalog:",
+		"@capacitor/browser": "catalog:",
+		"@capacitor/core": "catalog:",
 		"@tagalong/shared": "workspace:*",
+		"capacitor-secure-storage-plugin": "catalog:",
 		"react": "catalog:",
 		"react-dom": "catalog:"
 	},
 	"devDependencies": {
+		"@capacitor/android": "catalog:",
+		"@capacitor/cli": "catalog:",
+		"@capacitor/ios": "catalog:",
 		"@tagalong/config": "workspace:*",
 		"@types/react": "catalog:",
 		"@types/react-dom": "catalog:",

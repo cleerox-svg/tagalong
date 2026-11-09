@@ -27,3 +27,16 @@ catalog:
   "@types/react-dom": ^19.3.0
   vite: ^8.3.6
   "@vitejs/plugin-react": ^6.2.1
+  # Capacitor (phase 6). Core, CLI and the native platforms share one major and
+  # must move together; plugins peer on @capacitor/core >=8.
+  "@capacitor/core": ^8.6.0
+  "@capacitor/cli": ^8.6.0
+  "@capacitor/ios": ^8.6.0
+  "@capacitor/android": ^8.6.0
+  "@capacitor/app": ^8.1.2
+  "@capacitor/browser": ^8.0.5
+  # firebase (web SDK) is an optional peer and deliberately not installed: push
+  # uses the native SDKs only, so nothing Firebase lands in the PWA bundle.
+  "@capacitor-firebase/messaging": ^8.6.0
+  # Keychain (iOS) / Keystore (Android) backed. Not @capacitor/preferences.
+  capacitor-secure-storage-plugin: ^0.13.0
