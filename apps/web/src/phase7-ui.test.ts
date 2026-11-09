@@ -44,7 +44,10 @@ describe("stripAppCallbackParams error capture", () => {
 			"internal",
 			"google_token_failed",
 			"google_bad_token",
-			"apple_failed",
+			"apple_token_failed",
+			"apple_keys_failed",
+			"apple_bad_token",
+			"account_deleted",
 		]) {
 			const { mod } = await landOn(`/auth/app-callback?error=${code}`);
 			mod.stripAppCallbackParams();
@@ -82,9 +85,9 @@ describe("stripAppCallbackParams error capture", () => {
 	});
 
 	it("reads an error from the fragment too", async () => {
-		const { mod, location } = await landOn("/auth/app-callback#error=apple_failed");
+		const { mod, location } = await landOn("/auth/app-callback#error=apple_bad_token");
 		mod.stripAppCallbackParams();
-		expect(mod.appCallbackOutcome()).toEqual({ error: true, code: "apple_failed" });
+		expect(mod.appCallbackOutcome()).toEqual({ error: true, code: "apple_bad_token" });
 		expect(location.hash).toBe("");
 	});
 

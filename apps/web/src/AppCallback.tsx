@@ -11,7 +11,11 @@ import { linkTo } from "./router.js";
 
 export const APP_CALLBACK_PATH = "/auth/app-callback";
 
-/** Error codes the API may send here, each with a short, fixed reason. */
+/**
+ * Every error code the API's native sign-in can send here (apps/api/src/auth:
+ * nativeErrorPage, fed by HttpError codes from routes.ts, apple.ts and the rate
+ * limiter), each with a short, fixed reason. Anything else shows the generic page.
+ */
 const KNOWN_ERRORS = {
 	cancelled: "Sign-in was cancelled.",
 	bad_state: "The sign-in took too long or was started somewhere else.",
@@ -19,9 +23,12 @@ const KNOWN_ERRORS = {
 	misconfigured: "Sign-in isn't available right now.",
 	rate_limited: "There were too many sign-in attempts. Wait a minute first.",
 	internal: "Something went wrong on our side.",
+	account_deleted: "This account was deleted.",
 	google_token_failed: "Google didn't confirm the sign-in.",
-	google_bad_token: "Google didn't confirm the sign-in.",
-	apple_failed: "Apple didn't confirm the sign-in.",
+	google_bad_token: "Google couldn't verify the account.",
+	apple_token_failed: "Apple didn't confirm the sign-in.",
+	apple_keys_failed: "Apple didn't confirm the sign-in.",
+	apple_bad_token: "Apple couldn't verify the account.",
 } as const;
 
 export type AppCallbackErrorCode = keyof typeof KNOWN_ERRORS;

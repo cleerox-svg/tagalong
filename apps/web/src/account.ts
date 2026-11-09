@@ -22,7 +22,7 @@ export function deleteErrorMessage(err: unknown): string {
 	if (err instanceof ApiError) {
 		if (err.status === 401)
 			return "You've been signed out. Sign in again, then delete your account from this page.";
-		if (err.status === 429) return "Too many tries. Wait a minute, then try again.";
+		if (err.status === 429) return "Too many attempts. Try again in an hour.";
 		return "We couldn't delete your account just now. Try again.";
 	}
 	return "That didn't go through. Check your connection and try again.";
