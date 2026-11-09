@@ -34,7 +34,9 @@ export async function identityHash(
 	provider: IdentityProvider,
 	sub: string,
 ): Promise<string> {
-	return b64url(await crypto.subtle.sign("HMAC", await idKey(env), enc.encode(`${provider}:${sub}`)));
+	return b64url(
+		await crypto.subtle.sign("HMAC", await idKey(env), enc.encode(`${provider}:${sub}`)),
+	);
 }
 
 /** google_sub sentinels (migration 0009): Apple-only and deleted accounts. */

@@ -4,7 +4,7 @@
 import { Hono } from "hono";
 import { TagalongOptInSchema, type SharedGroup, type TagalongProfile } from "@tagalong/shared";
 import { deferOf } from "../chat/notify.js";
-import { HttpError, nowIso, readJson } from "../lib/http.js";
+import { HttpError, nowIso, readJson, signedOut } from "../lib/http.js";
 import {
 	adult,
 	isActiveTagalongUser,
@@ -42,14 +42,19 @@ tagalong.post("/tagalong/opt-in", ...adult, async (c) => {
 	const row = await c.env.DB.prepare(
 		`UPDATE users SET tagalong_opt_in_at = COALESCE(tagalong_opt_in_at, ?),
 		   tagalong_name = ?, tagalong_city = ?
-		 WHERE id = ? AND tagalong_suspended_at IS NULL
+		 WHERE id = ? AND tagalong_suspended_at IS NULL AND deleted_at IS NULL
 		 RETURNING created_at, tagalong_opt_in_at, tagalong_name, tagalong_city,
 		   tagalong_safety_ack_at, tagalong_trusted_at, tagalong_suspended_at`,
 	)
 		.bind(nowIso(), body.data.name, body.data.city, userId)
 		.first<Parameters<typeof tagalongStatus>[0]>();
-	if (!row)
+	if (!row) {
+		const live = await c.env.DB.prepare("SELECT 1 FROM users WHERE id = ? AND deleted_at IS NULL")
+			.bind(userId)
+			.first();
+		if (!live) throw signedOut();
 		throw new HttpError(403, "tagalong_suspended", "Your Tagalong access has been suspended.");
+	}
 	return c.json({ tagalong: tagalongStatus(row) });
 });
 
@@ -74,11 +79,13 @@ tagalong.post("/tagalong/opt-out", ...adult, async (c) => {
 /** The "meet in public places" note was shown and acknowledged (needed before connecting). */
 tagalong.post("/tagalong/safety-ack", ...member, async (c) => {
 	const userId = c.get("userId");
-	await c.env.DB.prepare(
-		"UPDATE users SET tagalong_safety_ack_at = COALESCE(tagalong_safety_ack_at, ?) WHERE id = ?",
+	const res = await c.env.DB.prepare(
+		`UPDATE users SET tagalong_safety_ack_at = COALESCE(tagalong_safety_ack_at, ?)
+		 WHERE id = ? AND deleted_at IS NULL`,
 	)
 		.bind(nowIso(), userId)
 		.run();
+	if (!res.meta.changes) throw signedOut();
 	const row = await loadTagalongRow(c.env.DB, userId);
 	if (!row) throw new HttpError(401, "signed_out", "Sign in first.");
 	return c.json({ tagalong: tagalongStatus(row) });

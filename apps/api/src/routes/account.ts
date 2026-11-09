@@ -50,9 +50,7 @@ account.post("/me/delete", requireTrustedWrite, requireUser, async (c) => {
 
 	// Revoke Sign in with Apple first (best effort; never blocks deletion).
 	const row = await db
-		.prepare(
-			"SELECT apple_refresh_token_enc AS rt, google_sub, apple_sub FROM users WHERE id = ?",
-		)
+		.prepare("SELECT apple_refresh_token_enc AS rt, google_sub, apple_sub FROM users WHERE id = ?")
 		.bind(userId)
 		.first<{ rt: string | null; google_sub: string; apple_sub: string | null }>();
 	if (!row) throw new HttpError(401, "signed_out", "Sign in first.");

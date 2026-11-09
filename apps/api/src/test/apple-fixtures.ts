@@ -67,9 +67,7 @@ export async function makeAppleKit(): Promise<AppleKit> {
 		rsaPublicJwk,
 		kid,
 		jwks: {
-			keys: [
-				{ kty: "RSA", kid, use: "sig", alg: "RS256", n: rsaPublicJwk.n, e: rsaPublicJwk.e },
-			],
+			keys: [{ kty: "RSA", kid, use: "sig", alg: "RS256", n: rsaPublicJwk.n, e: rsaPublicJwk.e }],
 		},
 		appleEnv: {
 			...env,
@@ -81,14 +79,23 @@ export async function makeAppleKit(): Promise<AppleKit> {
 	};
 }
 
-/** Calls the Worker with the given env (default: the Apple-configured one). */
+/** A random documentation-range IP, so the per-IP sign-in limit never couples tests. */
+export const randomIp = () =>
+	`198.51.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
+
+/**
+ * Calls the Worker with the given env. Each call gets its own
+ * CF-Connecting-IP unless one is given (sign-in endpoints are limited per IP).
+ */
 export async function callWith(
 	envToUse: Env,
 	path: string,
 	init: RequestInit = {},
 ): Promise<Response> {
+	const headers = new Headers(init.headers);
+	if (!headers.has("CF-Connecting-IP")) headers.set("CF-Connecting-IP", randomIp());
 	const ctx = createExecutionContext();
-	const res = await app.fetch(new Request(`${API}${path}`, init), envToUse, ctx);
+	const res = await app.fetch(new Request(`${API}${path}`, { ...init, headers }), envToUse, ctx);
 	await waitOnExecutionContext(ctx);
 	return res;
 }
@@ -256,6 +263,29 @@ export async function pkcePair(): Promise<{ verifier: string; challenge: string 
 	const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
 	const challenge = b64url(await crypto.subtle.digest("SHA-256", enc.encode(verifier)));
 	return { verifier, challenge };
+}
+
+/** The links (hrefs, &amp; decoded) on an HTML page. */
+export async function linksOf(res: Response): Promise<{ html: string; hrefs: string[] }> {
+	const html = await res.text();
+	const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map((m) =>
+		(m[1] ?? "").replace(/&amp;/g, "&"),
+	);
+	return { html, hrefs };
+}
+
+/**
+ * A native sign-in that failed: a 200 interstitial (never a redirect, never a
+ * session cookie) whose one link is exactly the app callback with `error`.
+ */
+export async function expectNativeError(res: Response, error: string) {
+	expect(res.status).toBe(200);
+	expect(res.headers.get("Location")).toBeNull();
+	expect(cookieOf(res, "tg_session")).toBe("");
+	expect(res.headers.get("Content-Security-Policy") ?? "").toContain("default-src 'none'");
+	expect(res.headers.get("Cache-Control")).toBe("no-store");
+	const { hrefs } = await linksOf(res);
+	expect(hrefs).toEqual([`${APP_CALLBACK}?error=${error}`]);
 }
 
 export const uniqueSub = (p = "s") => `${p}.${crypto.randomUUID().replace(/-/g, "")}.0101`;

@@ -9,11 +9,7 @@
  */
 import { env } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-	decryptRefreshToken,
-	encryptRefreshToken,
-	verifyAppleIdToken,
-} from "../auth/apple.js";
+import { decryptRefreshToken, encryptRefreshToken, verifyAppleIdToken } from "../auth/apple.js";
 import { b64url } from "../auth/session.js";
 import {
 	APP_CALLBACK,
@@ -23,13 +19,16 @@ import {
 	claimsFor,
 	cookieOf,
 	decodeJson,
+	expectNativeError,
 	ISS,
+	linksOf,
 	makeAppleKit,
 	mockApple,
 	newRsa,
 	nowS,
 	pkcePair,
 	postAppleCallback,
+	randomIp,
 	SERVICES_ID,
 	setCookieOf,
 	signJwt,
@@ -164,7 +163,7 @@ describe("Apple start: parameters and cookie", () => {
 		expect(set).toMatch(/;\s*Max-Age=600(;|$)/);
 	});
 
-	it("native: a missing or malformed challenge goes to the fixed app URL with no cookie", async () => {
+	it("native: a missing or malformed challenge shows the error page for the fixed app URL, with no cookie", async () => {
 		for (const q of [
 			"?native=1",
 			"?native=1&code_challenge=",
@@ -173,8 +172,7 @@ describe("Apple start: parameters and cookie", () => {
 			`?native=1&code_challenge=${"a".repeat(42)}%2B`,
 		]) {
 			const res = await callWith(kit.appleEnv, `/auth/apple/start${q}`);
-			expect(res.status, q).toBe(302);
-			expect(res.headers.get("Location"), q).toBe(`${APP_CALLBACK}?error=bad_request`);
+			await expectNativeError(res, "bad_request");
 			expect(setCookieOf(res, "tg_oauth_apple"), q).toBe("");
 		}
 	});
@@ -184,7 +182,7 @@ describe("Apple start: fails closed when misconfigured", () => {
 	const settings = ["APPLE_SERVICES_ID", "APPLE_TEAM_ID", "APPLE_KEY_ID", "APPLE_PRIVATE_KEY"];
 	for (const name of settings) {
 		for (const value of ["", "   ", undefined]) {
-			it(`${name}=${JSON.stringify(value)}: web 500 misconfigured, native to the app URL, no cookie`, async () => {
+			it(`${name}=${JSON.stringify(value)}: web 500 misconfigured, native error page, no cookie`, async () => {
 				const broken = { ...kit.appleEnv, [name]: value } as unknown as Env;
 				const { challenge } = await pkcePair();
 				const web = await callWith(broken, "/auth/apple/start");
@@ -197,8 +195,7 @@ describe("Apple start: fails closed when misconfigured", () => {
 					broken,
 					`/auth/apple/start?native=1&code_challenge=${challenge}`,
 				);
-				expect(nat.status).toBe(302);
-				expect(nat.headers.get("Location")).toBe(`${APP_CALLBACK}?error=misconfigured`);
+				await expectNativeError(nat, "misconfigured");
 				expect(setCookieOf(nat, "tg_oauth_apple")).toBe("");
 			});
 		}
@@ -209,7 +206,7 @@ describe("Apple start: fails closed when misconfigured", () => {
 		expect((await callWith(broken, "/auth/apple/start")).status).toBe(500);
 	});
 
-	it("an unusable private key fails closed at the exchange, without calling Apple (web 500, native app URL)", async () => {
+	it("an unusable private key fails closed at the exchange, without calling Apple (web 500, native error page)", async () => {
 		const broken = {
 			...kit.appleEnv,
 			APPLE_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----\n!!!not base64!!!\n-----END PRIVATE KEY-----",
@@ -224,8 +221,7 @@ describe("Apple start: fails closed when misconfigured", () => {
 		const { challenge } = await pkcePair();
 		const nat = await startApple(broken, `?native=1&code_challenge=${challenge}`);
 		const nres = await postAppleCallback(broken, { state: nat.state, code: "c" }, nat.cookie);
-		expect(nres.status).toBe(303);
-		expect(nres.headers.get("Location")).toBe(`${APP_CALLBACK}?error=misconfigured`);
+		await expectNativeError(nres, "misconfigured");
 		expect(fetchSpy.calls).toHaveLength(0);
 	});
 
@@ -239,6 +235,43 @@ describe("Apple start: fails closed when misconfigured", () => {
 		const res = await postAppleCallback(broken, { state: s.state, code: "c" }, s.cookie);
 		expect(res.status).toBe(500);
 		expect(fetchSpy.calls).toHaveLength(0);
+	});
+});
+
+describe("Apple sign-in: per-IP rate limit", () => {
+	it("start: 20 a minute per IP; then web 429, native the rate_limited error page; another IP is unaffected", async () => {
+		const ip = randomIp();
+		const at = (q = "") =>
+			callWith(kit.appleEnv, `/auth/apple/start${q}`, { headers: { "CF-Connecting-IP": ip } });
+		for (let i = 0; i < 20; i++) expect((await at()).status, `start ${i + 1}`).toBe(302);
+		const web = await at();
+		expect(web.status).toBe(429);
+		expect(setCookieOf(web, "tg_oauth_apple")).toBe("");
+		const { challenge } = await pkcePair();
+		await expectNativeError(await at(`?native=1&code_challenge=${challenge}`), "rate_limited");
+		expect((await callWith(kit.appleEnv, "/auth/apple/start")).status).toBe(302);
+	});
+
+	it("callback: limited per IP before any call to Apple", async () => {
+		const ip = randomIp();
+		const spy = mockFetch(() => undefined);
+		for (let i = 0; i < 20; i++) {
+			const s = await startApple(kit.appleEnv);
+			const res = await postAppleCallback(
+				kit.appleEnv,
+				{ state: s.state, error: "user_cancelled_authorize" },
+				s.cookie,
+				{ "CF-Connecting-IP": ip },
+			);
+			expect(res.status, `callback ${i + 1}`).toBe(303);
+		}
+		const s = await startApple(kit.appleEnv);
+		const limited = await postAppleCallback(kit.appleEnv, { state: s.state, code: "c" }, s.cookie, {
+			"CF-Connecting-IP": ip,
+		});
+		expect(limited.status).toBe(429);
+		expect(cookieOf(limited, "tg_session")).toBe("");
+		expect(spy.calls).toHaveLength(0);
 	});
 });
 
@@ -310,7 +343,10 @@ describe("Apple callback: state and cookie", () => {
 			[{ state: b.state, code: "c" }, a.cookie],
 			[{ state: `${a.state}x`, code: "c" }, a.cookie],
 			[{ state: a.state, code: "c" }, tampered],
-			[{ state: a.state, code: "c" }, `tg_oauth_apple=${encodeURIComponent(JSON.stringify({ state: a.state, nonce: a.nonce, returnTo: `${WEB}/` }))}`],
+			[
+				{ state: a.state, code: "c" },
+				`tg_oauth_apple=${encodeURIComponent(JSON.stringify({ state: a.state, nonce: a.nonce, returnTo: `${WEB}/` }))}`,
+			],
 		] as const) {
 			const res = await postAppleCallback(kit.appleEnv, fields as Record<string, string>, cookie);
 			expect(res.status, JSON.stringify(fields)).toBe(400);
@@ -360,7 +396,7 @@ describe("Apple callback: state and cookie", () => {
 		expect(await countUsers(sub)).toBe(1);
 	});
 
-	it("error=user_cancelled_authorize: web goes back to returnTo (303), native to the app URL, neither calls Apple", async () => {
+	it("error=user_cancelled_authorize: web goes back to returnTo (303), native to the app-URL error page, neither calls Apple", async () => {
 		const spy = mockFetch(() => undefined);
 		const w = await startApple(kit.appleEnv, `?return_to=${encodeURIComponent(`${WEB}/trips`)}`);
 		const web = await postAppleCallback(
@@ -379,8 +415,7 @@ describe("Apple callback: state and cookie", () => {
 			{ state: n.state, error: "user_cancelled_authorize" },
 			n.cookie,
 		);
-		expect(nat.status).toBe(303);
-		expect(nat.headers.get("Location")).toBe(`${APP_CALLBACK}?error=cancelled`);
+		await expectNativeError(nat, "cancelled");
 		expect(spy.calls).toHaveLength(0);
 	});
 
@@ -394,13 +429,12 @@ describe("Apple callback: state and cookie", () => {
 		expect(res.status).toBe(400);
 	});
 
-	it("native: a state mismatch goes to the app URL with bad_state", async () => {
+	it("native: a state mismatch shows the error page linking to the app URL with bad_state", async () => {
 		const { challenge } = await pkcePair();
 		const n = await startApple(kit.appleEnv, `?native=1&code_challenge=${challenge}`);
 		const spy = mockFetch(() => undefined);
 		const res = await postAppleCallback(kit.appleEnv, { state: "n.other", code: "c" }, n.cookie);
-		expect(res.status).toBe(303);
-		expect(res.headers.get("Location")).toBe(`${APP_CALLBACK}?error=bad_state`);
+		await expectNativeError(res, "bad_state");
 		expect(spy.calls).toHaveLength(0);
 	});
 
@@ -461,7 +495,9 @@ describe("verifyAppleIdToken", () => {
 			expect(c.is_private_email, String(v)).toBe(want);
 		}
 		// Anything else is not a boolean Apple sends: the token is refused.
-		await rejects(verifyAppleIdToken(await sign(good({ email_verified: "yes" })), SERVICES_ID, NONCE));
+		await rejects(
+			verifyAppleIdToken(await sign(good({ email_verified: "yes" })), SERVICES_ID, NONCE),
+		);
 		await rejects(verifyAppleIdToken(await sign(good({ email_verified: 1 })), SERVICES_ID, NONCE));
 	});
 
@@ -480,7 +516,9 @@ describe("verifyAppleIdToken", () => {
 				NONCE,
 			),
 		);
-		await rejects(verifyAppleIdToken(`${h}.${token.split(".")[1]}.${s?.slice(0, 20)}`, SERVICES_ID, NONCE));
+		await rejects(
+			verifyAppleIdToken(`${h}.${token.split(".")[1]}.${s?.slice(0, 20)}`, SERVICES_ID, NONCE),
+		);
 		await rejects(verifyAppleIdToken(`${h}.${token.split(".")[1]}.`, SERVICES_ID, NONCE));
 		await rejects(verifyAppleIdToken(`${h}.${token.split(".")[1]}.***`, SERVICES_ID, NONCE));
 	});
@@ -489,7 +527,11 @@ describe("verifyAppleIdToken", () => {
 		const fetches = keys();
 		const payload = b64json(good());
 		await rejects(
-			verifyAppleIdToken(`${b64json({ alg: "none", kid: kit.kid })}.${payload}.`, SERVICES_ID, NONCE),
+			verifyAppleIdToken(
+				`${b64json({ alg: "none", kid: kit.kid })}.${payload}.`,
+				SERVICES_ID,
+				NONCE,
+			),
 		);
 		await rejects(
 			verifyAppleIdToken(`${b64json({ alg: "none" })}.${payload}.`, SERVICES_ID, NONCE),
@@ -514,7 +556,13 @@ describe("verifyAppleIdToken", () => {
 	it("rejects tokens that aren't three parts or aren't JSON", async () => {
 		keys();
 		const token = await sign(good());
-		for (const t of ["", "a.b", `${token}.extra`, "x.y.z", `${b64url(enc.encode("not json"))}.${b64json(good())}.sig`])
+		for (const t of [
+			"",
+			"a.b",
+			`${token}.extra`,
+			"x.y.z",
+			`${b64url(enc.encode("not json"))}.${b64json(good())}.sig`,
+		])
 			await rejects(verifyAppleIdToken(t, SERVICES_ID, NONCE));
 	});
 
@@ -613,7 +661,14 @@ describe("verifyAppleIdToken", () => {
 
 	it("rejects a nonce mismatch, a missing nonce and a prefix / suffix of ours", async () => {
 		keys();
-		for (const nonce of ["other", "", `${NONCE}x`, NONCE.slice(0, -1), NONCE.toUpperCase(), undefined])
+		for (const nonce of [
+			"other",
+			"",
+			`${NONCE}x`,
+			NONCE.slice(0, -1),
+			NONCE.toUpperCase(),
+			undefined,
+		])
 			await rejects(verifyAppleIdToken(await sign(good({ nonce })), SERVICES_ID, NONCE));
 	});
 
@@ -639,7 +694,7 @@ describe("Apple callback: a rejected id_token creates nothing", () => {
 		["nonce mismatch", { claims: { nonce: "attacker-nonce" } }],
 	];
 	for (const [label, over] of cases) {
-		it(`${label}: web 401, no session, no user; native to the app URL, no code`, async () => {
+		it(`${label}: web 401, no session, no user; native error page, no code`, async () => {
 			const sub = uniqueSub();
 			// claimsFor's nonce comes from the flow unless overridden.
 			const reply = { sub, ...over } as AppleReply;
@@ -653,9 +708,7 @@ describe("Apple callback: a rejected id_token creates nothing", () => {
 			const n = await startApple(kit.appleEnv, `?native=1&code_challenge=${challenge}`);
 			mockApple(kit, reply, () => n.nonce);
 			const nat = await postAppleCallback(kit.appleEnv, { state: n.state, code: "c" }, n.cookie);
-			expect(nat.status).toBe(303);
-			expect(nat.headers.get("Location")).toBe(`${APP_CALLBACK}?error=apple_bad_token`);
-			expect(cookieOf(nat, "tg_session")).toBe("");
+			await expectNativeError(nat, "apple_bad_token");
 			expect(await countCodes()).toBe(before);
 			expect(await countUsers(sub)).toBe(0);
 		});
@@ -788,7 +841,11 @@ describe("Apple callback: the id_token in the form body is ignored", () => {
 			kid: kit.kid,
 		});
 		const spy = mockFetch(() => undefined);
-		const res = await postAppleCallback(kit.appleEnv, { state: s.state, id_token: token }, s.cookie);
+		const res = await postAppleCallback(
+			kit.appleEnv,
+			{ state: s.state, id_token: token },
+			s.cookie,
+		);
 		expect(res.status).toBe(303);
 		expect(res.headers.get("Location")).toBe(`${WEB}/x`);
 		expect(cookieOf(res, "tg_session")).toBe("");
@@ -811,7 +868,9 @@ describe("Apple callback: first-sign-in `user` name", () => {
 		).toBe("Grace Hopper");
 		expect(await nameFrom(JSON.stringify({ name: { firstName: "Cher" } }))).toBe("Cher");
 		expect(
-			await nameFrom(JSON.stringify({ name: { firstName: "Zoë", lastName: "Ångström" }, extra: 1 })),
+			await nameFrom(
+				JSON.stringify({ name: { firstName: "Zoë", lastName: "Ångström" }, extra: 1 }),
+			),
 		).toBe("Zoë Ångström");
 	});
 
@@ -831,8 +890,8 @@ describe("Apple callback: first-sign-in `user` name", () => {
 			JSON.stringify({ name: { firstName: "x".repeat(40), lastName: "y".repeat(40) } }),
 			JSON.stringify({ name: { firstName: "Ada\u0000" } }),
 			JSON.stringify({ name: { firstName: "Ada\nLovelace" } }),
-			JSON.stringify({ name: { firstName: "Ada‮ecalevol" } }),
-			JSON.stringify({ name: { firstName: "Ada​" } }),
+			JSON.stringify({ name: { firstName: "Ada\u202eecalevol" } }),
+			JSON.stringify({ name: { firstName: "Ada\u200b" } }),
 			JSON.stringify({ name: { firstName: "Ada" }, email: "x".repeat(300) }),
 			JSON.stringify({ name: { firstName: "Ada" }, pad: "x".repeat(2100) }),
 		])
@@ -841,7 +900,10 @@ describe("Apple callback: first-sign-in `user` name", () => {
 
 	it("never renames an existing account, even with a valid name", async () => {
 		const sub = uniqueSub();
-		const first = await webSignIn({ sub }, { user: JSON.stringify({ name: { firstName: "Ada" } }) });
+		const first = await webSignIn(
+			{ sub },
+			{ user: JSON.stringify({ name: { firstName: "Ada" } }) },
+		);
 		const second = await webSignIn(
 			{ sub },
 			{ user: JSON.stringify({ name: { firstName: "Mallory", lastName: "Evil" } }) },
@@ -916,13 +978,13 @@ describe("Apple refresh token at rest", () => {
 		const sub = uniqueSub();
 		await webSignIn({ sub, refreshToken: "rt-one" });
 		await webSignIn({ sub, refreshToken: null });
-		expect(await decryptRefreshToken(env, (await userRow(sub))?.apple_refresh_token_enc ?? "")).toBe(
-			"rt-one",
-		);
+		expect(
+			await decryptRefreshToken(env, (await userRow(sub))?.apple_refresh_token_enc ?? ""),
+		).toBe("rt-one");
 		await webSignIn({ sub, refreshToken: "rt-two" });
-		expect(await decryptRefreshToken(env, (await userRow(sub))?.apple_refresh_token_enc ?? "")).toBe(
-			"rt-two",
-		);
+		expect(
+			await decryptRefreshToken(env, (await userRow(sub))?.apple_refresh_token_enc ?? ""),
+		).toBe("rt-two");
 	});
 
 	it("no refresh token on a first sign-in stores NULL", async () => {
@@ -995,21 +1057,13 @@ describe("Apple native sign-in", () => {
 		return { res, ...pk };
 	}
 
-	const linkOf = async (res: Response) => {
-		const html = await res.text();
-		const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map((m) =>
-			(m[1] ?? "").replace(/&amp;/g, "&"),
-		);
-		return { html, hrefs };
-	};
-
 	it("issues a one-time code on https://tagalong.averrow.com/auth/app-callback, redeemable once with the PKCE verifier", async () => {
 		const sub = uniqueSub();
 		const { res, verifier } = await nativeSignIn({ sub });
 		expect(res.status).toBe(200);
 		expect(cookieOf(res, "tg_session")).toBe("");
 		expect(res.headers.get("Cache-Control")).toBe("no-store");
-		const { hrefs } = await linkOf(res);
+		const { hrefs } = await linksOf(res);
 		expect(hrefs).toHaveLength(1);
 		const link = new URL(hrefs[0] ?? "");
 		expect(`${link.origin}${link.pathname}`).toBe(APP_CALLBACK);
@@ -1028,7 +1082,7 @@ describe("Apple native sign-in", () => {
 			{ sub },
 			JSON.stringify({ name: { firstName: "Nat" } }),
 		);
-		const { hrefs } = await linkOf(res);
+		const { hrefs } = await linksOf(res);
 		const code = new URL(hrefs[0] ?? "").searchParams.get("code") ?? "";
 		const ok = await exchange(code, verifier);
 		expect(ok.status).toBe(200);
@@ -1045,21 +1099,20 @@ describe("Apple native sign-in", () => {
 			{ sub, claims: { email: undefined, email_verified: undefined } },
 			JSON.stringify({ name: { firstName: '<img src=x onerror="alert(1)">' } }),
 		);
-		const { html, hrefs } = await linkOf(res);
+		const { html, hrefs } = await linksOf(res);
 		expect(html).not.toContain("<img");
 		expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
 		expect(hrefs).toHaveLength(1);
 	});
 
-	it("an Apple error during the exchange goes back to the app URL with a short code", async () => {
+	it("an Apple error during the exchange shows the error page with a short code", async () => {
 		const pk = await pkcePair();
 		const s = await startApple(kit.appleEnv, `?native=1&code_challenge=${pk.challenge}`);
 		mockFetch((url) =>
 			url.href === `${ISS}/auth/token` ? new Response("{}", { status: 500 }) : undefined,
 		);
 		const res = await postAppleCallback(kit.appleEnv, { state: s.state, code: "c" }, s.cookie);
-		expect(res.status).toBe(303);
-		expect(res.headers.get("Location")).toBe(`${APP_CALLBACK}?error=apple_token_failed`);
+		await expectNativeError(res, "apple_token_failed");
 	});
 
 	it("a web-state callback never yields a native code, and a native one never a cookie session", async () => {

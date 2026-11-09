@@ -85,13 +85,19 @@ const SIGN_IN_LIMIT = 20;
  * Per-IP limit on a sign-in endpoint. Web: throws the 429. Native: returns the
  * error interstitial (error=rate_limited), since the app only ever sees the
  * fixed callback URL. Null when under the limit.
+ *
+ * Keyed on CF-Connecting-IP, which Cloudflare's edge sets (and overwrites) on
+ * every request that reaches the Worker, so a client can neither omit nor
+ * spoof it. Only in-process calls (the test suite) arrive without it; those
+ * are not limited, rather than all sharing one "unknown" bucket.
  */
 async function signInLimit(
 	c: Context<AppEnv>,
 	endpoint: string,
 	isNative: boolean,
 ): Promise<Response | null> {
-	const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
+	const ip = c.req.header("CF-Connecting-IP");
+	if (!ip) return null;
 	try {
 		await rateLimit(c.env.DB, `signin:${endpoint}:${ip}`, SIGN_IN_LIMIT, 60);
 		return null;
@@ -226,7 +232,13 @@ const INTERSTITIAL_HEADERS = {
 } as const;
 
 /** Both interstitials: one heading, one message, one button to `href` (already escaped). */
-function interstitialHtml(o: { title: string; heading: string; body: string; href: string; button: string }) {
+function interstitialHtml(o: {
+	title: string;
+	heading: string;
+	body: string;
+	href: string;
+	button: string;
+}) {
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -629,11 +641,12 @@ auth.post("/me/onboarding", requireTrustedWrite, requireUser, async (c) => {
 			"Confirm you are 18 or older and pick a currency.",
 			body.error.issues,
 		);
-	await c.env.DB.prepare(
+	const res = await c.env.DB.prepare(
 		`UPDATE users SET birthdate_verified_18 = 1, age_confirmed_at = COALESCE(age_confirmed_at, ?),
-		 home_currency = ?, home_city = COALESCE(?, home_city) WHERE id = ?`,
+		 home_currency = ?, home_city = COALESCE(?, home_city) WHERE id = ? AND deleted_at IS NULL`,
 	)
 		.bind(nowIso(), body.data.home_currency, body.data.home_city ?? null, c.get("userId"))
 		.run();
+	if (!res.meta.changes) throw new HttpError(401, "signed_out", "Sign in first.");
 	return c.json({ ok: true });
 });

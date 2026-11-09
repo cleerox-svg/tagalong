@@ -13,7 +13,7 @@ import {
 	type Connection,
 } from "@tagalong/shared";
 import { deferOf, kick } from "../chat/notify.js";
-import { HttpError, newId, nowIso, readJson } from "../lib/http.js";
+import { HttpError, LIVE_USER, newId, nowIso, readJson } from "../lib/http.js";
 import { connectionEvent, notify } from "../push/dispatch.js";
 import {
 	adult,
@@ -140,6 +140,7 @@ social.post("/connections", ...member, async (c) => {
 			 SELECT ?, ?, ?, ?, 'pending', ?
 			 WHERE NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = ? AND b.blocked_id = ?)
 			   OR (b.blocker_id = ? AND b.blocked_id = ?))
+			   AND ${LIVE_USER} AND ${LIVE_USER}
 			 ON CONFLICT (user_lo, user_hi) DO UPDATE SET
 			   status = CASE WHEN ${theyAsked} THEN 'accepted' WHEN ${reopen} THEN 'pending'
 			     ELSE connections.status END,
@@ -150,7 +151,7 @@ social.post("/connections", ...member, async (c) => {
 			   requested_by = CASE WHEN ${reopen} THEN excluded.requested_by ELSE connections.requested_by END
 			 RETURNING id, created_at, responded_at`,
 		)
-		.bind(newId(), lo, hi, u.id, now, lo, hi, hi, lo)
+		.bind(newId(), lo, hi, u.id, now, lo, hi, hi, lo, lo, hi)
 		.first<{ id: string; created_at: string; responded_at: string | null }>();
 	if (!row) throw notFound;
 	const connection = await connectionView(db, row.id, u.id);

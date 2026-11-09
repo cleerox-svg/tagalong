@@ -11,6 +11,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { decryptRefreshToken } from "../auth/apple.js";
 import { b64url, fromB64url } from "../auth/session.js";
 import app from "../index.js";
+import { expectNativeError } from "./apple-fixtures.js";
 import { API, call, json, mockFetch, signedInUser, WEB } from "./helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -172,8 +173,7 @@ describe("Sign in with Apple: start", () => {
 		expect(res.status).toBe(500);
 		expect(await res.json()).toMatchObject({ error: { code: "misconfigured" } });
 		const nat = await call(`/auth/apple/start?native=1&code_challenge=${"a".repeat(43)}`);
-		expect(nat.status).toBe(302);
-		expect(nat.headers.get("Location")).toBe(`${APP}?error=misconfigured`);
+		await expectNativeError(nat, "misconfigured");
 	});
 
 	it("redirects to Apple with form_post, our callback, state and nonce in a SameSite=None cookie", async () => {
@@ -196,7 +196,7 @@ describe("Sign in with Apple: start", () => {
 
 	it("rejects a native start without a valid challenge, on the fixed app URL", async () => {
 		const res = await callApple("/auth/apple/start?native=1&code_challenge=short");
-		expect(res.headers.get("Location")).toBe(`${APP}?error=bad_request`);
+		await expectNativeError(res, "bad_request");
 	});
 });
 
@@ -353,8 +353,7 @@ describe("Sign in with Apple: callback", () => {
 
 	it("native: a lost state cookie still ends on the app URL", async () => {
 		const res = await postCallback({ state: `n.${crypto.randomUUID()}`, code: "c" }, "");
-		expect(res.status).toBe(303);
-		expect(res.headers.get("Location")).toBe(`${APP}?error=bad_state`);
+		await expectNativeError(res, "bad_state");
 	});
 });
 

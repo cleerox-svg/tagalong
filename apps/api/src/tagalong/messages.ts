@@ -10,7 +10,7 @@
 import type { ChatMessage, RoomKind } from "@tagalong/shared";
 import { messageCursor, parseMessageCursor, SendMessageSchema } from "@tagalong/shared";
 import { broadcast, type Defer } from "../chat/notify.js";
-import { HttpError, invalidInput, newId, nowIso } from "../lib/http.js";
+import { HttpError, invalidInput, LIVE_USER, newId, nowIso, signedOut } from "../lib/http.js";
 import { messageEvent, notify } from "../push/dispatch.js";
 import { NOT_BLOCKED, SHOWN_NAME, type TagalongUser } from "./access.js";
 import { checkMessageBody, limitMessage } from "./limits.js";
@@ -133,6 +133,7 @@ export async function sendMessage(
 	const row = await env.DB.prepare(
 		`INSERT INTO messages (id, group_id, connection_id, user_id, body, created_at, seq)
 		 SELECT ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(seq) FROM messages), 0) + 1
+		 WHERE ${LIVE_USER}
 		 RETURNING seq`,
 	)
 		.bind(
@@ -142,9 +143,11 @@ export async function sendMessage(
 			u.id,
 			body,
 			created_at,
+			u.id,
 		)
 		.first<{ seq: number }>();
-	if (!row) throw new HttpError(500, "internal", "Could not send the message.");
+	// No row: the author's account was deleted while this request ran.
+	if (!row) throw signedOut();
 
 	const message: ChatMessage = {
 		id,

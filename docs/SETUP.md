@@ -194,7 +194,15 @@ After sign-in the API shows a short page on `tagalong-api.averrow.com`
 ("Signed in as … — Open Budgetrip"). That tap is deliberate: a user tap on a
 link to a different domain is what reliably makes iOS and Android open the
 app rather than the website. If the app isn't installed, the link opens the
-web app's `/auth/app-callback` page.
+web app's `/auth/app-callback` page. A native sign-in that fails (cancelled,
+expired, rate limited, …) shows the same kind of page ("Sign-in didn't
+finish — …") with a **Return to Budgetrip** link to the same fixed URL with
+`?error=<code>`, for the same reason.
+
+The four sign-in endpoints (`/auth/google/start`, `/auth/google/callback`,
+`/auth/apple/start`, `/auth/apple/callback`) are limited to 20 requests a
+minute per IP each (by `CF-Connecting-IP`): the web gets a 429, the app the
+error page with `error=rate_limited`.
 
 Owner fill-ins before the store builds (the web app serves both files from
 `apps/web/public/.well-known/`):
@@ -278,16 +286,28 @@ token, chat sockets).
 | Push devices, notification settings, pending app sign-in codes         | Reports filed by and against the user                                                                         |
 | Group memberships and blocks (both ways); open connections are closed  | The text of any of their messages that was reported (for moderation; hidden from chat)                        |
 | Their other messages: hidden, text replaced with `[message deleted]`   | The Tagalong suspension marker, if they were suspended                                                        |
-| The Sign in with Apple grant (revoked at Apple, best effort)           |                                                                                                               |
+| The Sign in with Apple grant (revoked at Apple, best effort)           | Suspended accounts only: a keyed hash of each sign-in identity (see below)                                    |
 
 Signing in again with the same Google or Apple account creates a new, empty
 account.
+
+**Suspended accounts.** So that deleting an account can't be used to get
+around a Tagalong suspension, when a suspended user deletes their account we
+keep, for each way they signed in, a keyed hash of that sign-in identity
+(HMAC-SHA256 of the Google or Apple account id, keyed from `SESSION_SECRET`)
+and the suspension date, in `suspended_identities` (migration
+`0010_suspended_identities`). Nothing else: no email, name or raw account id.
+A new account created by the same Google or Apple account starts suspended
+from Tagalong (the rest of Budgetrip works as normal). Nothing is kept for
+accounts that were not suspended. Rotating `SESSION_SECRET` makes the stored
+hashes unmatchable.
 
 ## Phase 7 (store readiness) in short
 
 Sign in with Apple (§1g), the HTTPS app callback (§1f), and in-app account
 deletion (§1h). Migration `0009_store_readiness` adds `users.apple_sub`,
-`apple_refresh_token_enc` and `deleted_at`. Owner steps: §1g items 1-5 and the
+`apple_refresh_token_enc` and `deleted_at`; `0010_suspended_identities` keeps
+suspensions across delete and re-sign-up (§1h). Owner steps: §1g items 1-5 and the
 fill-ins under "Mobile sign-in" above.
 
 ## 2. GitHub repository secrets
