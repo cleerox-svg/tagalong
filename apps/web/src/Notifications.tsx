@@ -6,7 +6,7 @@ import {
 } from "@tagalong/shared";
 import { useEffect, useId, useState } from "react";
 import { api } from "./api.js";
-import { enablePush, isNative, pushPermission, type PushPermission } from "./native.js";
+import { enablePush, isNative, pushPermission, type PushOutcome } from "./native.js";
 
 const KIND_TEXT: Record<NotificationKind, { label: string; description: string }> = {
 	dm: {
@@ -135,10 +135,14 @@ export function Notifications() {
 	);
 }
 
+const PUSH_FAILED =
+	"We couldn't turn on notifications for this phone. Check your connection and try again.";
+
 /** In the app: whether this phone will show notifications, and a way to allow them. */
 function PushStatus() {
-	const [perm, setPerm] = useState<PushPermission | null>(null);
+	const [perm, setPerm] = useState<PushOutcome | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
 		let live = true;
@@ -167,12 +171,20 @@ function PushStatus() {
 				disabled={busy}
 				onClick={async () => {
 					setBusy(true);
-					setPerm(await enablePush());
+					setError(null);
+					const result = await enablePush();
+					// A failure leaves the button so they can try again.
+					if (result === "failed") setError(PUSH_FAILED);
+					else setPerm(result);
 					setBusy(false);
 				}}
 			>
 				Enable push notifications
 			</button>
+			{/* Always mounted, so the error is announced when it appears. */}
+			<p className="error notif-error" role="status" aria-live="polite">
+				{error}
+			</p>
 		</div>
 	);
 }
