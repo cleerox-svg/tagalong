@@ -113,8 +113,11 @@ export function Notifications() {
 										role="switch"
 										checked={prefs[kind]}
 										aria-describedby={`${ids}-${kind}-d`}
-										disabled={saving.has(kind)}
-										onChange={(e) => void toggle(kind, e.target.checked)}
+										// Not `disabled`: that would drop keyboard focus mid-save.
+										aria-disabled={saving.has(kind) || undefined}
+										onChange={(e) => {
+											if (!saving.has(kind)) void toggle(kind, e.target.checked);
+										}}
 									/>
 									<span>{KIND_TEXT[kind].label}</span>
 								</label>
@@ -126,7 +129,7 @@ export function Notifications() {
 					</ul>
 				</fieldset>
 			)}
-			<p className="error" role="alert">
+			<p className="error notif-error" role="alert">
 				{saveError}
 			</p>
 		</section>

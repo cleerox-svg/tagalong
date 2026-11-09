@@ -65,9 +65,9 @@ type PrefsRow = Record<keyof NotificationPrefs, number>;
 // Column names come from the fixed NOTIFICATION_KINDS list, never from input.
 const PREF_COLUMNS = NOTIFICATION_KINDS.join(", ");
 /** `kind = COALESCE(?, current)` per kind: a NULL bind keeps the stored value. */
-const PREF_UPDATES = NOTIFICATION_KINDS.map((k) => `${k} = COALESCE(?, notification_prefs.${k})`).join(
-	", ",
-);
+const PREF_UPDATES = NOTIFICATION_KINDS.map(
+	(k) => `${k} = COALESCE(?, notification_prefs.${k})`,
+).join(", ");
 
 const toPrefs = (row: PrefsRow | null): NotificationPrefs =>
 	row

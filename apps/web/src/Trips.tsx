@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api, type TripsResponse } from "./api.js";
 import { linkTo } from "./router.js";
 import { WhoElse } from "./WhoElse.js";
+import { askForPushInContext } from "./native.js";
 
 const money = (amount_minor: number, currency: string) => formatMoney({ amount_minor, currency });
 const when = (iso: string) =>
@@ -58,7 +59,11 @@ export function Trips() {
 									type="checkbox"
 									checked={t.alerts_enabled}
 									onChange={async (e) => {
-										await api.setAlerts(t.plan_id, e.target.checked).catch(() => undefined);
+										const on = e.target.checked;
+										await api
+											.setAlerts(t.plan_id, on)
+											.then(() => on && askForPushInContext())
+											.catch(() => undefined);
 										void load();
 									}}
 								/>

@@ -12,6 +12,7 @@ import { BackLink, ErrorCard } from "./ErrorCard.js";
 import { linkTo, navigate } from "./router.js";
 import { BlockDialog, ConfirmDialog, ReportDialog } from "./SafetyActions.js";
 import { useMe } from "./TagalongGate.js";
+import { askForPushInContext } from "./native.js";
 
 const time = (iso: string) => {
 	const d = new Date(iso);
@@ -163,7 +164,10 @@ export function ChatPanel({
 		if (!body || sending || linkWarning) return;
 		setSending(true);
 		nearBottom.current = true;
-		if (await chat.send(body)) setDraft("");
+		if (await chat.send(body)) {
+			setDraft("");
+			askForPushInContext();
+		}
 		setSending(false);
 	};
 

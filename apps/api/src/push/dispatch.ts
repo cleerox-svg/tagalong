@@ -218,13 +218,22 @@ async function eligible(db: D1Database, p: Planned): Promise<string[]> {
 			   ${gate}
 			 ORDER BY u.id LIMIT ?4`,
 		)
-		.bind(p.actorId, JSON.stringify(ids), DEFAULT_NOTIFICATION_PREFS[p.kind] ? 1 : 0, MAX_RECIPIENTS)
+		.bind(
+			p.actorId,
+			JSON.stringify(ids),
+			DEFAULT_NOTIFICATION_PREFS[p.kind] ? 1 : 0,
+			MAX_RECIPIENTS,
+		)
 		.all<{ id: string }>();
 	return results.map((r) => r.id);
 }
 
 /** Claims the throttle slot for each user atomically; returns only those who got it. */
-async function claimThrottle(db: D1Database, userIds: string[], roomKey: string): Promise<string[]> {
+async function claimThrottle(
+	db: D1Database,
+	userIds: string[],
+	roomKey: string,
+): Promise<string[]> {
 	if (userIds.length === 0) return [];
 	const now = Date.now();
 	const { results } = await db

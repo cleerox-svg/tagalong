@@ -11,6 +11,7 @@ import {
 } from "./api.js";
 import { linkTo, navigate } from "./router.js";
 import { WhoElse } from "./WhoElse.js";
+import { askForPushInContext } from "./native.js";
 
 const LABELS: Record<PlanPackage["label"], string> = {
 	cheapest: "Cheapest",
@@ -190,7 +191,13 @@ function SaveShare({ planId }: { planId: string }) {
 						type="button"
 						className="primary"
 						disabled={busy}
-						onClick={() => act(async () => ({ ...(await api.save(planId)), alerts_enabled: true }))}
+						onClick={() =>
+							act(async () => {
+								const res = await api.save(planId);
+								askForPushInContext();
+								return { ...res, alerts_enabled: true };
+							})
+						}
 					>
 						☆ Save trip
 					</button>
@@ -201,7 +208,14 @@ function SaveShare({ planId }: { planId: string }) {
 							type="checkbox"
 							checked={state.alerts_enabled}
 							disabled={busy}
-							onChange={(e) => act(() => api.setAlerts(planId, e.target.checked))}
+							onChange={(e) => {
+								const on = e.target.checked;
+								act(async () => {
+									const res = await api.setAlerts(planId, on);
+									if (on) askForPushInContext();
+									return res;
+								});
+							}}
 						/>
 						Email me if the price drops
 					</label>
