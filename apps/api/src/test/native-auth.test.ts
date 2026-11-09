@@ -4,7 +4,8 @@
  */
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { b64url } from "../auth/session.js";
+import { issueNativeCode } from "../auth/native.js";
+import { b64url, issueBearer, signToken } from "../auth/session.js";
 import {
 	call,
 	groupWith,
@@ -32,9 +33,13 @@ const challengeOf = async (verifier: string) =>
 const newVerifier = () => b64url(crypto.getRandomValues(new Uint8Array(48)));
 
 /** Runs the native start + callback against a mocked Google; returns the app redirect. */
-async function nativeSignIn(verifier: string, sub = `g-${crypto.randomUUID()}`) {
+async function nativeSignIn(
+	verifier: string,
+	sub = `g-${crypto.randomUUID()}`,
+	extraQuery = "",
+) {
 	const start = await call(
-		`/auth/google/start?native=1&code_challenge=${await challengeOf(verifier)}`,
+		`/auth/google/start?native=1&code_challenge=${await challengeOf(verifier)}${extraQuery}`,
 	);
 	expect(start.status).toBe(302);
 	const state = new URL(start.headers.get("Location") ?? "").searchParams.get("state");
@@ -166,5 +171,318 @@ describe("chat tickets", () => {
 		const { groupId } = await groupWith(await tagalongUser());
 		const res = await postJson("/chat/ticket", { kind: "group", id: groupId }, a.cookie);
 		expect(res.status).toBe(404);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// test-engineer additions (phase 6 gaps).
+// ---------------------------------------------------------------------------
+
+const codeOf = (loc: string) =>
+	new URL(loc.replace(/^[^:]+:/, "https:")).searchParams.get("code") ?? "";
+
+async function codeRow(userId: string) {
+	return env.DB.prepare(
+		"SELECT used_at, expires_at FROM native_auth_codes WHERE user_id = ? ORDER BY created_at DESC",
+	)
+		.bind(userId)
+		.all<{ used_at: string | null; expires_at: string }>();
+}
+
+describe("native code exchange: edges", () => {
+	it("rejects an expired code even with the right verifier", async () => {
+		const u = await signedInUser();
+		const verifier = newVerifier();
+		const code = await issueNativeCode(env.DB, u.id, await challengeOf(verifier));
+		await env.DB.prepare("UPDATE native_auth_codes SET expires_at = ? WHERE user_id = ?")
+			.bind(new Date(Date.now() - 1000).toISOString(), u.id)
+			.run();
+		expect((await exchange(code, verifier)).status).toBe(400);
+		// An expired code is never marked used (no token issued), and stays unusable.
+		expect((await exchange(code, verifier)).status).toBe(400);
+	});
+
+	it("accepts a fresh code issued directly (control for the expiry test)", async () => {
+		const u = await signedInUser();
+		const verifier = newVerifier();
+		const code = await issueNativeCode(env.DB, u.id, await challengeOf(verifier));
+		const res = await exchange(code, verifier);
+		expect(res.status).toBe(200);
+		const { token } = await res.json<{ token: string }>();
+		const me = await call("/me", { headers: { Authorization: `Bearer ${token}` } });
+		expect((await me.json<{ id: string }>()).id).toBe(u.id);
+	});
+
+	it("rejects a verifier that belongs to a different challenge, burns that code, leaves the other", async () => {
+		const u = await signedInUser();
+		const v1 = newVerifier();
+		const v2 = newVerifier();
+		const c1 = await issueNativeCode(env.DB, u.id, await challengeOf(v1));
+		const c2 = await issueNativeCode(env.DB, u.id, await challengeOf(v2));
+
+		// v2 is a genuine verifier, but for c2's challenge, not c1's.
+		const wrong = await exchange(c1, v2);
+		expect(wrong.status).toBe(400);
+		// c1 is burned: its own verifier no longer works.
+		expect((await exchange(c1, v1)).status).toBe(400);
+		const rows = (await codeRow(u.id)).results;
+		expect(rows.filter((r) => r.used_at !== null)).toHaveLength(1);
+		// c2 was untouched by the failed attempt.
+		expect((await exchange(c2, v2)).status).toBe(200);
+	});
+
+	it("answers a failed exchange the same way whatever the reason", async () => {
+		const u = await signedInUser();
+		const v = newVerifier();
+		const code = await issueNativeCode(env.DB, u.id, await challengeOf(v));
+		const unknown = await exchange(b64url(crypto.getRandomValues(new Uint8Array(32))), v);
+		const mismatch = await exchange(code, newVerifier());
+		expect(unknown.status).toBe(400);
+		expect(mismatch.status).toBe(400);
+		expect(await unknown.text()).toBe(await mismatch.text());
+	});
+
+	it("rate-limits the exchange per IP with a 429", async () => {
+		const ip = `203.0.113.${Math.floor(Math.random() * 250) + 1}-${crypto.randomUUID()}`;
+		const attempt = () =>
+			call("/auth/native/exchange", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "CF-Connecting-IP": ip },
+				body: JSON.stringify({ code: "A".repeat(43), code_verifier: "a".repeat(43) }),
+			});
+		for (let i = 0; i < 20; i++) expect((await attempt()).status).toBe(400);
+		const limited = await attempt();
+		expect(limited.status).toBe(429);
+		// A valid code from another IP is unaffected.
+		const u = await signedInUser();
+		const v = newVerifier();
+		const code = await issueNativeCode(env.DB, u.id, await challengeOf(v));
+		const other = await call("/auth/native/exchange", {
+			method: "POST",
+			headers: { "Content-Type": "application/json", "CF-Connecting-IP": `${ip}-other` },
+			body: JSON.stringify({ code, code_verifier: v }),
+		});
+		expect(other.status).toBe(200);
+	});
+});
+
+describe("native start: no client-chosen redirect", () => {
+	const evil = "https://evil.example/steal";
+	const extra = [
+		`&return_to=${encodeURIComponent(evil)}`,
+		`&redirect=${encodeURIComponent(evil)}`,
+		`&redirect_uri=${encodeURIComponent(evil)}`,
+		`&callback=${encodeURIComponent(evil)}`,
+	].join("");
+
+	it("sends Google our own callback and ends on the fixed app URL", async () => {
+		const verifier = newVerifier();
+		const start = await call(
+			`/auth/google/start?native=1&code_challenge=${await challengeOf(verifier)}${extra}`,
+		);
+		expect(start.status).toBe(302);
+		const google = new URL(start.headers.get("Location") ?? "");
+		expect(google.hostname).toBe("accounts.google.com");
+		expect(google.searchParams.get("redirect_uri")).toBe(
+			"https://tagalong-api.averrow.com/auth/google/callback",
+		);
+		expect(google.href).not.toContain("evil.example");
+
+		const res = await nativeSignIn(verifier, undefined, extra);
+		expect(res.status).toBe(302);
+		const loc = res.headers.get("Location") ?? "";
+		expect(loc.startsWith(`${APP}?code=`)).toBe(true);
+		expect(loc).not.toContain("evil.example");
+		expect((await exchange(codeOf(loc), verifier)).status).toBe(200);
+	});
+
+	it("a cancelled or bad-state native callback still goes to the app URL, never return_to", async () => {
+		const verifier = newVerifier();
+		const start = await call(
+			`/auth/google/start?native=1&code_challenge=${await challengeOf(verifier)}${extra}`,
+		);
+		const state = new URL(start.headers.get("Location") ?? "").searchParams.get("state");
+		const cookie = (start.headers.get("Set-Cookie") ?? "").split(";")[0] ?? "";
+		const cancelled = await call(`/auth/google/callback?state=${state}`, { cookie });
+		expect(cancelled.headers.get("Location")).toBe(`${APP}?error=cancelled`);
+		const bad = await call(`/auth/google/callback?state=nope&code=abc`, { cookie });
+		expect(bad.headers.get("Location")).toBe(`${APP}?error=bad_state`);
+	});
+
+	it("a bad challenge with a return_to still errors to the app URL", async () => {
+		const res = await call(`/auth/google/start?native=1&code_challenge=short${extra}`);
+		expect(res.status).toBe(302);
+		expect(res.headers.get("Location")).toBe(`${APP}?error=bad_request`);
+	});
+});
+
+describe("bearer vs cookie", () => {
+	it("a valid bearer for A wins over a valid cookie for B", async () => {
+		const a = await signedInUser();
+		const b = await signedInUser();
+		const { token } = await issueBearer(env, a.id);
+		const res = await call("/me", { cookie: b.cookie, headers: { Authorization: `Bearer ${token}` } });
+		expect(res.status).toBe(200);
+		expect((await res.json<{ id: string }>()).id).toBe(a.id);
+
+		// A write too: the bearer user's prefs change, not the cookie user's.
+		const w = await call("/me/notifications", {
+			method: "POST",
+			cookie: b.cookie,
+			headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+			body: JSON.stringify({ dm: false }),
+		});
+		expect(w.status).toBe(200);
+		const aPrefs = await call("/me/notifications", { headers: { Authorization: `Bearer ${token}` } });
+		expect((await aPrefs.json<{ dm: boolean }>()).dm).toBe(false);
+		const bPrefs = await call("/me/notifications", { cookie: b.cookie });
+		expect((await bPrefs.json<{ dm: boolean }>()).dm).toBe(true);
+	});
+
+	it("a malformed Authorization on a write without a web Origin is 403, even with a valid cookie", async () => {
+		const u = await signedInUser();
+		for (const authorization of ["Basic x", "Bearer", "Token abc", ""]) {
+			const res = await call("/me/notifications", {
+				method: "POST",
+				cookie: u.cookie,
+				headers: { "Content-Type": "application/json", Authorization: authorization },
+				body: JSON.stringify({ dm: false }),
+			});
+			expect(res.status, JSON.stringify(authorization)).toBe(403);
+		}
+		const prefs = await call("/me/notifications", { cookie: u.cookie });
+		expect((await prefs.json<{ dm: boolean }>()).dm).toBe(true);
+	});
+
+	it("a malformed Authorization never falls back to the cookie, even from the web origin", async () => {
+		const u = await signedInUser();
+		const res = await call("/me/notifications", {
+			method: "POST",
+			cookie: u.cookie,
+			headers: { "Content-Type": "application/json", Authorization: "Basic x", Origin: WEB },
+			body: JSON.stringify({ dm: false }),
+		});
+		expect(res.status).toBe(401);
+	});
+
+	it("an expired bearer is refused", async () => {
+		const u = await signedInUser();
+		const { token } = await issueBearer(env, u.id);
+		const real = Date.now();
+		vi.spyOn(Date, "now").mockReturnValue(real + 31 * 86400_000);
+		expect((await call("/me", { headers: { Authorization: `Bearer ${token}` } })).status).toBe(401);
+	});
+
+	it("a bearer token for a deleted account is refused", async () => {
+		const { token } = await issueBearer(env, `ghost-${crypto.randomUUID()}`);
+		expect((await call("/me", { headers: { Authorization: `Bearer ${token}` } })).status).toBe(401);
+	});
+});
+
+describe("chat tickets: edges", () => {
+	const ws = (path: string, origin?: string) =>
+		call(path, { headers: { Upgrade: "websocket", ...(origin ? { Origin: origin } : {}) } });
+
+	async function ticketFor(user: { cookie: string }, kind: "group" | "dm", id: string) {
+		const res = await postJson("/chat/ticket", { kind, id }, user.cookie);
+		expect(res.status).toBe(200);
+		return (await res.json<{ ticket: string; expires_at: string }>()).ticket;
+	}
+
+	it("refuses an expired ticket", async () => {
+		const a = await tagalongUser();
+		const { groupId } = await groupWith(a);
+		const ticket = await ticketFor(a, "group", groupId);
+		const real = Date.now();
+		vi.spyOn(Date, "now").mockReturnValue(real + 61_000);
+		const res = await ws(
+			`/chat/group/${groupId}/ws?ticket=${encodeURIComponent(ticket)}`,
+			"capacitor://localhost",
+		);
+		expect(res.status).toBe(401);
+	});
+
+	it("refuses a ticket re-labelled for another user (tampered payload)", async () => {
+		const a = await tagalongUser();
+		const b = await tagalongUser();
+		const { groupId } = await groupWith(a, b);
+		const ticket = await ticketFor(a, "group", groupId);
+		const dot = ticket.lastIndexOf(".");
+		const payload = JSON.parse(
+			atob(ticket.slice(0, dot).replace(/-/g, "+").replace(/_/g, "/")),
+		) as { u: string };
+		expect(payload.u).toBe(a.id);
+		const forged = `${b64url(new TextEncoder().encode(JSON.stringify({ ...payload, u: b.id })))}${ticket.slice(dot)}`;
+		const res = await ws(
+			`/chat/group/${groupId}/ws?ticket=${encodeURIComponent(forged)}`,
+			"capacitor://localhost",
+		);
+		expect(res.status).toBe(401);
+	});
+
+	it("a validly signed ticket for a user outside the room still gets no socket", async () => {
+		const a = await tagalongUser();
+		const outsider = await tagalongUser();
+		const { groupId } = await groupWith(a);
+		const e = Math.floor(Date.now() / 1000) + 60;
+		const payload = b64url(
+			new TextEncoder().encode(JSON.stringify({ u: outsider.id, k: "group", i: groupId, e })),
+		);
+		const ticket = await signToken(env, "tagalong:chat-ticket:v1", payload);
+		const res = await ws(
+			`/chat/group/${groupId}/ws?ticket=${encodeURIComponent(ticket)}`,
+			"capacitor://localhost",
+		);
+		expect(res.status).toBe(404);
+	});
+
+	it("refuses a bearer token presented as a ticket, and a group ticket on the dm path", async () => {
+		const a = await tagalongUser();
+		const { groupId } = await groupWith(a);
+		const { token } = await issueBearer(env, a.id);
+		expect(
+			(await ws(`/chat/group/${groupId}/ws?ticket=${encodeURIComponent(token)}`, "capacitor://localhost"))
+				.status,
+		).toBe(401);
+		const ticket = await ticketFor(a, "group", groupId);
+		expect(
+			(await ws(`/chat/dm/${groupId}/ws?ticket=${encodeURIComponent(ticket)}`, "capacitor://localhost"))
+				.status,
+		).toBe(401);
+	});
+
+	it("refuses a ticket used from any web, foreign or missing origin", async () => {
+		const a = await tagalongUser();
+		const { groupId } = await groupWith(a);
+		const ticket = await ticketFor(a, "group", groupId);
+		const q = `?ticket=${encodeURIComponent(ticket)}`;
+		for (const origin of [WEB, "http://localhost:5173", "https://evil.example", undefined]) {
+			expect((await ws(`/chat/group/${groupId}/ws${q}`, origin)).status, String(origin)).toBe(403);
+		}
+		// Still valid from the native origin afterwards (the refusals didn't consume it).
+		const ok = await ws(`/chat/group/${groupId}/ws${q}`, "https://localhost");
+		expect(ok.status).toBe(101);
+		ok.webSocket?.accept();
+		ok.webSocket?.close();
+	});
+
+	it("mints a ticket with a bearer from the native app; a cookie from the native origin is 403", async () => {
+		const a = await tagalongUser();
+		const { groupId } = await groupWith(a);
+		const { token } = await issueBearer(env, a.id);
+		const res = await call("/chat/ticket", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${token}`,
+				Origin: "capacitor://localhost",
+			},
+			body: JSON.stringify({ kind: "group", id: groupId }),
+		});
+		expect(res.status).toBe(200);
+		expect(
+			(await postJson("/chat/ticket", { kind: "group", id: groupId }, a.cookie, "capacitor://localhost"))
+				.status,
+		).toBe(403);
 	});
 });
