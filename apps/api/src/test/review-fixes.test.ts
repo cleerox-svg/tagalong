@@ -19,7 +19,7 @@ import {
 } from "./helpers.js";
 
 const mutableEnv = env as unknown as Record<string, string | undefined>;
-const APP = "com.averrow.budgetrip://auth/callback";
+const APP = "https://tagalong.averrow.com/auth/app-callback";
 
 afterEach(() => {
 	vi.restoreAllMocks();

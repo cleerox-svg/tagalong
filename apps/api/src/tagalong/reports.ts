@@ -19,7 +19,7 @@ import type {
 } from "@tagalong/shared";
 import type { Defer } from "../chat/notify.js";
 import { HttpError, newId, nowIso } from "../lib/http.js";
-import { loadConnectionByPair, shareAGroup } from "./access.js";
+import { loadConnectionByPair, shareAGroup, SHOWN_NAME } from "./access.js";
 import { leaveTagalong } from "./leave.js";
 import { broadcastDeleted, type DeletedRoom } from "./messages.js";
 
@@ -100,11 +100,11 @@ interface ReportRow {
 
 const REPORT_SELECT = `SELECT r.id, r.target_type, r.target_id, r.reason, r.details, r.created_at,
 	  r.resolved_at, r.resolved_by, r.resolution,
-	  r.reporter_id, ru.tagalong_name AS reporter_name,
+	  r.reporter_id, ${SHOWN_NAME("ru")} AS reporter_name,
 	  m.id AS m_id, m.body AS m_body, m.group_id AS m_group_id, m.connection_id AS m_connection_id,
 	  m.user_id AS m_author_id, m.created_at AS m_created_at, m.deleted_at AS m_deleted_at,
 	  m.deleted_by AS m_deleted_by,
-	  tu.id AS t_id, tu.tagalong_name AS t_name, tu.tagalong_city AS t_city,
+	  tu.id AS t_id, ${SHOWN_NAME("tu")} AS t_name, tu.tagalong_city AS t_city,
 	  tu.tagalong_suspended_at AS t_suspended_at
 	FROM reports r
 	JOIN users ru ON ru.id = r.reporter_id

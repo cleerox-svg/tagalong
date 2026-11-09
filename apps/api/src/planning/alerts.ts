@@ -57,7 +57,7 @@ export async function checkSavedTrips(
 			 JOIN trip_requests t ON t.id = s.trip_request_id
 			 JOIN plans p ON p.id = s.latest_plan_id
 			 LEFT JOIN events e ON e.id = p.event_id
-			 WHERE s.alerts_enabled = 1
+			 WHERE s.alerts_enabled = 1 AND u.deleted_at IS NULL
 			   AND (s.last_checked_at IS NULL OR s.last_checked_at < ?)
 			   AND COALESCE(e.local_date, t.date_to) >= ?
 			 ORDER BY s.last_checked_at IS NOT NULL, s.last_checked_at
@@ -130,6 +130,7 @@ export async function checkSavedTrips(
 		await dispatchPush(env, { kind: "price_drop", alertId }); // never throws; no-op without FCM
 
 		if (!env.RESEND_API_KEY) continue; // recorded and shown in the app; no email until the key is set
+		if (!trip.email) continue; // an Apple account that shared no email address
 		const name = trip.event_name ?? trip.event_query;
 		const was = formatMoney({ amount_minor: trip.best_total_minor, currency: trip.currency });
 		const nowPrice = formatMoney({ amount_minor: latest, currency: trip.currency });

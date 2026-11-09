@@ -22,6 +22,7 @@ import {
 	loadConnection,
 	member,
 	NOT_BLOCKED,
+	SHOWN_NAME,
 	otherParty,
 	pairOf,
 	requireDm,
@@ -63,7 +64,7 @@ function toConnection(r: ConnectionWithOther, me: string): Connection {
 async function connectionView(db: D1Database, id: string, me: string): Promise<Connection> {
 	const row = await db
 		.prepare(
-			`SELECT ${CONNECTION_COLUMNS}, u.tagalong_name AS other_name, u.tagalong_city AS other_city
+			`SELECT ${CONNECTION_COLUMNS}, ${SHOWN_NAME("u")} AS other_name, u.tagalong_city AS other_city
 			 FROM connections c
 			 JOIN users u ON u.id = CASE WHEN c.user_lo = ? THEN c.user_hi ELSE c.user_lo END
 			 WHERE c.id = ? AND (c.user_lo = ? OR c.user_hi = ?)`,
@@ -85,7 +86,7 @@ const safetyAckRequired = () =>
 social.get("/connections", ...member, async (c) => {
 	const me = c.get("userId");
 	const { results } = await c.env.DB.prepare(
-		`SELECT ${CONNECTION_COLUMNS}, u.tagalong_name AS other_name, u.tagalong_city AS other_city
+		`SELECT ${CONNECTION_COLUMNS}, ${SHOWN_NAME("u")} AS other_name, u.tagalong_city AS other_city
 		 FROM connections c
 		 JOIN users u ON u.id = CASE WHEN c.user_lo = ? THEN c.user_hi ELSE c.user_lo END
 		 WHERE (c.user_lo = ? OR c.user_hi = ?) AND ${NOT_BLOCKED("u.id")}

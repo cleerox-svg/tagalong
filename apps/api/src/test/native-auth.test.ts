@@ -19,7 +19,7 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
-const APP = "com.averrow.budgetrip://auth/callback";
+const APP = "https://tagalong.averrow.com/auth/app-callback";
 
 const idToken = (claims: Record<string, unknown>) => {
 	const b64 = (o: unknown) =>
@@ -79,7 +79,9 @@ async function appLink(res: Response): Promise<string> {
 	expect(hrefs).toHaveLength(1);
 	expect(html).not.toMatch(/<script/i);
 	const link = hrefs[0] ?? "";
-	expect(link).toMatch(/^com\.averrow\.budgetrip:\/\/auth\/callback\?code=[A-Za-z0-9_-]{43}$/);
+	expect(link).toMatch(
+		/^https:\/\/tagalong\.averrow\.com\/auth\/app-callback\?code=[A-Za-z0-9_-]{43}$/,
+	);
 	return link;
 }
 

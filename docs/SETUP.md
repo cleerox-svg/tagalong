@@ -181,30 +181,114 @@ unset: pushes are skipped and the Worker logs why (never the key itself).
    and `GoogleService-Info.plist` in `apps/web/ios/App/App/`. They are
    gitignored; **never commit them**. Each developer keeps their own copy.
 
-### Mobile sign-in: blocker before store release
+### Mobile sign-in: verified HTTPS callback (done in phase 7)
 
-Native sign-in currently hands the one-time code back to the app on the
-custom scheme `com.averrow.budgetrip://auth/callback` (`NATIVE_CALLBACK` in
-`apps/api/src/auth/native.ts`). **Any installed app can claim a custom
-scheme**, so another app could receive that redirect. Until this is fixed the
-API shows an interstitial ("Signed in as ... — Return to Budgetrip") instead
-of redirecting silently; that is an interim mitigation, not a fix (PKCE still
-stops a code thief that lacks the verifier, but don't rely on that alone).
+Native sign-in (Google and Apple) hands the one-time code back to the app on
+a fixed, verified HTTPS link, `https://tagalong.averrow.com/auth/app-callback`
+(`NATIVE_CALLBACK` in `apps/api/src/auth/native.ts`), an Android App Link and
+iOS Universal Link. The OS opens it only in the app the domain vouches for, so
+no other installed app can receive the code (the old custom scheme could be
+claimed by anyone). The code is still single-use, 60 s, and PKCE-bound.
 
-**Before the app ships to the App Store or Play Store**, switch
-`NATIVE_CALLBACK` to a verified HTTPS link on `tagalong.averrow.com`, e.g.
-`https://tagalong.averrow.com/auth/app-callback`:
+After sign-in the API shows a short page on `tagalong-api.averrow.com`
+("Signed in as … — Open Budgetrip"). That tap is deliberate: a user tap on a
+link to a different domain is what reliably makes iOS and Android open the
+app rather than the website. If the app isn't installed, the link opens the
+web app's `/auth/app-callback` page.
 
-- Android App Link: serve `https://tagalong.averrow.com/.well-known/assetlinks.json`
-  with the package `com.averrow.budgetrip` and the release signing
-  certificate's SHA-256 fingerprint, and add an intent filter with
-  `android:autoVerify="true"` for that host and path.
-- iOS Universal Link: serve
-  `https://tagalong.averrow.com/.well-known/apple-app-site-association`
-  (`applinks`, your Team ID + `com.averrow.budgetrip`, the callback path), and
-  add the Associated Domains entitlement `applinks:tagalong.averrow.com`.
-- Then update the app's URL listener and drop the interstitial. Add the `hold`
-  label to that PR.
+Owner fill-ins before the store builds (the web app serves both files from
+`apps/web/public/.well-known/`):
+
+- **iOS:** in `apple-app-site-association`, replace the Team ID placeholder
+  with your 10-character Team ID (developer.apple.com → Membership). On the
+  App ID `com.averrow.budgetrip` enable the **Associated Domains**
+  capability; the app's entitlement is `applinks:tagalong.averrow.com`.
+- **Android:** in `assetlinks.json`, list the SHA-256 certificate
+  fingerprints of **both** the release key and your debug key. For the
+  release key use the **App signing key** fingerprint from Play Console →
+  your app → Test and release → App integrity → App signing (Play App Signing
+  re-signs the app, so your upload key's fingerprint is not enough).
+- **Cloudflare:** the OS fetches these files without a browser, so a bot
+  challenge breaks verification silently. On the averrow.com zone add a WAF
+  custom rule that **skips** all managed rules / Bot Fight Mode / Super Bot
+  Fight Mode for `http.host eq "tagalong.averrow.com" and starts_with(http.request.uri.path, "/.well-known/")`,
+  and make sure they are served as `application/json` with no redirect.
+- Add the `hold` label to the PR that fills these in.
+
+## 1g. Sign in with Apple (phase 7)
+
+The App Store requires Sign in with Apple in an app that offers Google
+sign-in. It works on the web and in the app (the same `form_post` flow in the
+system browser). Until it is configured, `/auth/apple/start` answers 500
+`misconfigured` (the app gets `error=misconfigured`): it fails closed.
+
+1. developer.apple.com → Certificates, IDs & Profiles → **Identifiers** →
+   the App ID `com.averrow.budgetrip` → enable **Sign in with Apple** (and
+   **Associated Domains**, see above).
+2. Identifiers → **+** → **Services IDs** → e.g.
+   `com.averrow.budgetrip.signin`. Enable Sign in with Apple → Configure:
+   primary App ID `com.averrow.budgetrip`; **Domains and Subdomains**
+   `tagalong-api.averrow.com`; **Return URLs**
+   `https://tagalong-api.averrow.com/auth/apple/callback`. (Apple accepts
+   only HTTPS return URLs, so Apple sign-in can't be tried on
+   `http://localhost:8787`.)
+3. **Keys** → **+** → enable Sign in with Apple (primary App ID as above) →
+   download `AuthKey_XXXXXXXXXX.p8` (once only) and note its **Key ID**.
+   Your **Team ID** is under Membership.
+4. Put the three non-secret values in `apps/api/wrangler.jsonc` in a PR (with
+   the `hold` label), and the key as a secret, then delete the local `.p8`:
+
+```sh
+cd apps/api
+pnpm exec wrangler secret put APPLE_PRIVATE_KEY < AuthKey_XXXXXXXXXX.p8
+```
+
+| Name                | Kind                       | Value                                                            |
+| ------------------- | -------------------------- | ---------------------------------------------------------------- |
+| `APPLE_SERVICES_ID` | var (`wrangler.jsonc`)     | The Services ID from step 2, e.g. `com.averrow.budgetrip.signin` |
+| `APPLE_TEAM_ID`     | var (`wrangler.jsonc`)     | Your 10-character Team ID                                        |
+| `APPLE_KEY_ID`      | var (`wrangler.jsonc`)     | The Key ID of the `.p8` from step 3                              |
+| `APPLE_PRIVATE_KEY` | secret (`wrangler secret`) | The whole `.p8` file (PKCS8 PEM)                                 |
+
+5. **Private email relay.** Users can hide their address; Apple then gives
+   us `…@privaterelay.appleid.com`, and Apple only relays mail from senders
+   you register. Certificates, IDs & Profiles → **Services** → **Sign in with
+   Apple for Email Communication** → Configure → add the domain
+   `averrow.com` and the address `alerts@averrow.com`. The domain must pass
+   SPF (and should have DKIM), which the Resend records from §1c already
+   provide. Without this, price-drop emails to relay addresses bounce.
+
+An Apple sign-in always has its own account: it is never linked to a Google
+account with the same email (an email match isn't proof it's the same person,
+and relay addresses never match anyway). `GET /me` lists
+`sign_in_providers`. Apple's refresh token is stored encrypted (AES-GCM, key
+derived from `SESSION_SECRET`) only so it can be revoked when the account is
+deleted; rotating `SESSION_SECRET` just means that revoke is skipped.
+
+## 1h. Account deletion (phase 7)
+
+Signed-in users can delete their account in the app (the **Delete account**
+section of their account screen, typing DELETE), as both stores require: `POST /me/delete`. It runs
+as one database transaction and signs the user out everywhere (cookie, app
+token, chat sockets).
+
+| Deleted                                                                | Kept                                                                                                          |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Trip requests, plans, packages, saved trips, share links, price alerts | The `users` row as a tombstone: email, names, home city and Tagalong profile cleared; shown as "Deleted user" |
+| Push devices, notification settings, pending app sign-in codes         | Reports filed by and against the user                                                                         |
+| Group memberships and blocks (both ways); open connections are closed  | The text of any of their messages that was reported (for moderation; hidden from chat)                        |
+| Their other messages: hidden, text replaced with `[message deleted]`   | The Tagalong suspension marker, if they were suspended                                                        |
+| The Sign in with Apple grant (revoked at Apple, best effort)           |                                                                                                               |
+
+Signing in again with the same Google or Apple account creates a new, empty
+account.
+
+## Phase 7 (store readiness) in short
+
+Sign in with Apple (§1g), the HTTPS app callback (§1f), and in-app account
+deletion (§1h). Migration `0009_store_readiness` adds `users.apple_sub`,
+`apple_refresh_token_enc` and `deleted_at`. Owner steps: §1g items 1-5 and the
+fill-ins under "Mobile sign-in" above.
 
 ## 2. GitHub repository secrets
 

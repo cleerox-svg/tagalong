@@ -12,7 +12,7 @@ import { messageCursor, parseMessageCursor, SendMessageSchema } from "@tagalong/
 import { broadcast, type Defer } from "../chat/notify.js";
 import { HttpError, invalidInput, newId, nowIso } from "../lib/http.js";
 import { messageEvent, notify } from "../push/dispatch.js";
-import { NOT_BLOCKED, type TagalongUser } from "./access.js";
+import { NOT_BLOCKED, SHOWN_NAME, type TagalongUser } from "./access.js";
 import { checkMessageBody, limitMessage } from "./limits.js";
 
 export const PAGE_SIZE = 50;
@@ -67,7 +67,7 @@ export async function listMessages(
 	}
 	const { results } = await db
 		.prepare(
-			`SELECT m.id, m.user_id, u.tagalong_name AS name, m.body, m.seq, m.created_at
+			`SELECT m.id, m.user_id, ${SHOWN_NAME("u")} AS name, m.body, m.seq, m.created_at
 			 FROM messages m JOIN users u ON u.id = m.user_id
 			 WHERE ${where.join(" AND ")}
 			 ORDER BY m.seq ${order} LIMIT ?`,

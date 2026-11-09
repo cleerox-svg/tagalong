@@ -200,7 +200,9 @@ async function appleKeys(fresh: boolean): Promise<Jwk[]> {
 }
 
 /** Apple sends these as booleans or as "true"/"false". */
-const BoolLike = z.union([z.boolean(), z.enum(["true", "false"])]).transform((v) => v === true || v === "true");
+const BoolLike = z
+	.union([z.boolean(), z.enum(["true", "false"])])
+	.transform((v) => v === true || v === "true");
 
 const AppleClaims = z.object({
 	iss: z.string(),
@@ -306,7 +308,11 @@ async function rtKey(env: Env): Promise<CryptoKey> {
 
 export async function encryptRefreshToken(env: Env, token: string): Promise<string> {
 	const iv = crypto.getRandomValues(new Uint8Array(12));
-	const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await rtKey(env), enc.encode(token));
+	const ct = await crypto.subtle.encrypt(
+		{ name: "AES-GCM", iv },
+		await rtKey(env),
+		enc.encode(token),
+	);
 	return `${b64url(iv)}.${b64url(ct)}`;
 }
 

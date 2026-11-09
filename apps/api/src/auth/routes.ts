@@ -180,21 +180,23 @@ const escapeHtml = (s: string) =>
 	);
 
 /**
- * Interim (security review M1): any installed app can register the custom
- * scheme, so a successful native sign-in first shows who signed in and asks
- * the user to tap through, instead of redirecting silently. The link is always
- * nativeRedirect (the fixed NATIVE_CALLBACK); nothing from the request is in
- * it. Before store release NATIVE_CALLBACK becomes a verified HTTPS App Link /
- * Universal Link (docs/SETUP.md, "Mobile sign-in").
+ * A successful native sign-in shows who signed in and a single "Open
+ * Budgetrip" link to NATIVE_CALLBACK, a verified HTTPS App Link / Universal
+ * Link on the web origin (phase 7). It stays a page on the API's domain on
+ * purpose: a user tap on a link to a DIFFERENT domain is what reliably makes
+ * iOS and Android hand the URL to the app (a server redirect, or a same-domain
+ * link, may just open the website). The link is always nativeRedirect;
+ * nothing from the request is in it. If the app isn't installed the link opens
+ * the web app's /auth/app-callback page instead.
  */
-function nativeInterstitial(c: Context<AppEnv>, email: string, appCode: string): Response {
+function nativeInterstitial(c: Context<AppEnv>, who: string, appCode: string): Response {
 	const href = escapeHtml(nativeRedirect({ code: appCode }));
 	const html = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Return to Budgetrip</title>
+<title>Open Budgetrip</title>
 <style>
 body{font-family:system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;line-height:1.5;color:#111}
 a.button{display:inline-block;padding:.75rem 1.25rem;border-radius:.5rem;background:#0b5fff;color:#fff;text-decoration:none;font-weight:600}
@@ -202,8 +204,8 @@ p.note{color:#555;font-size:.9rem}
 </style>
 </head>
 <body>
-<h1>Signed in as ${escapeHtml(email)}</h1>
-<p><a class="button" href="${href}">Return to Budgetrip</a></p>
+<h1>Signed in as ${escapeHtml(who)}</h1>
+<p><a class="button" href="${href}">Open Budgetrip</a></p>
 <p class="note">If you didn't start signing in to the Budgetrip app, close this page.</p>
 </body>
 </html>
@@ -454,11 +456,24 @@ auth.post("/auth/logout", requireTrustedWrite, (c) => {
 	return c.json({ ok: true });
 });
 
+/**
+ * How the account signs in. google_sub holds a sentinel for Apple-only
+ * ('apple:…') and deleted ('deleted:…') accounts (migration 0009), so only a
+ * real Google sub counts as Google.
+ */
+function signInProviders(u: { google_sub: string; apple_sub: string | null }): AuthProvider[] {
+	const out: AuthProvider[] = [];
+	if (!u.google_sub.startsWith("apple:") && !u.google_sub.startsWith("deleted:"))
+		out.push("google");
+	if (u.apple_sub !== null) out.push("apple");
+	return out;
+}
+
 auth.get("/me", requireUser, async (c) => {
 	const me = await c.env.DB.prepare(
 		`SELECT id, email, display_name, home_city, home_currency, birthdate_verified_18,
-		   ${TAGALONG_COLUMNS}
-		 FROM users WHERE id = ?`,
+		   google_sub, apple_sub, ${TAGALONG_COLUMNS}
+		 FROM users WHERE id = ? AND deleted_at IS NULL`,
 	)
 		.bind(c.get("userId"))
 		.first<
@@ -469,6 +484,8 @@ auth.get("/me", requireUser, async (c) => {
 				home_city: string | null;
 				home_currency: string | null;
 				birthdate_verified_18: number;
+				google_sub: string;
+				apple_sub: string | null;
 			} & TagalongRow
 		>();
 	if (!me) throw new HttpError(401, "signed_out", "Sign in first.");
@@ -483,6 +500,7 @@ auth.get("/me", requireUser, async (c) => {
 		birthdate_verified_18: me.birthdate_verified_18 === 1,
 		tagalong: tagalongStatus(me),
 		is_moderator: isModerator(c.env, me.id),
+		sign_in_providers: signInProviders(me),
 	});
 });
 

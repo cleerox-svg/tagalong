@@ -131,6 +131,7 @@ groups.get("/groups/:id", ...member, async (c) => {
 			 FROM group_members m JOIN users u ON u.id = m.user_id
 			 WHERE m.group_id = ? AND u.tagalong_opt_in_at IS NOT NULL
 			   AND u.tagalong_suspended_at IS NULL AND u.tagalong_name IS NOT NULL
+			   AND u.deleted_at IS NULL
 			   AND ${NOT_BLOCKED("m.user_id")}
 			 ORDER BY m.joined_at, m.user_id LIMIT ?`,
 		)

@@ -110,7 +110,7 @@ const clip = (s: string) => {
 
 async function tagalongName(db: D1Database, userId: string): Promise<string> {
 	const row = await db
-		.prepare("SELECT tagalong_name AS name FROM users WHERE id = ?")
+		.prepare("SELECT tagalong_name AS name FROM users WHERE id = ? AND deleted_at IS NULL")
 		.bind(userId)
 		.first<{ name: string | null }>();
 	return row?.name ? clip(row.name) : FALLBACK_NAME;
@@ -230,7 +230,7 @@ async function eligible(db: D1Database, p: Planned): Promise<string[]> {
 			`SELECT u.id FROM users u LEFT JOIN notification_prefs np ON np.user_id = u.id
 			 LEFT JOIN push_throttle pt ON pt.user_id = u.id AND pt.room_key = ?5
 			 WHERE u.id IN (SELECT value FROM json_each(?2))
-			   AND u.id IS NOT ?1
+			   AND u.id IS NOT ?1 AND u.deleted_at IS NULL
 			   AND COALESCE(np.${p.kind}, ?3) = 1
 			   AND EXISTS (SELECT 1 FROM push_devices d WHERE d.user_id = u.id AND d.disabled_at IS NULL)
 			   AND (pt.last_sent_at IS NULL OR pt.last_sent_at < ?6)
