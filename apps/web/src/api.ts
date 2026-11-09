@@ -17,7 +17,10 @@ import type {
 	PinnedEvent,
 	Place,
 	TripRequest,
+	NotificationPrefs,
+	NotificationPrefsUpdate,
 } from "@tagalong/shared";
+import { clearNativeToken, getNativeToken, isNative } from "./native.js";
 
 export const API_BASE = __API_BASE__;
 
@@ -35,7 +38,17 @@ export class ApiError extends Error {
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const headers = new Headers(init.headers);
 	if (init.body) headers.set("Content-Type", "application/json");
-	const res = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "include" });
+	// The app authenticates with a bearer token and never sends cookies; the
+	// browser uses the session cookie as before.
+	const native = isNative();
+	const token = native ? await getNativeToken() : null;
+	if (token) headers.set("Authorization", `Bearer ${token}`);
+	const res = await fetch(`${API_BASE}${path}`, {
+		...init,
+		headers,
+		credentials: native ? "omit" : "include",
+	});
+	if (native && res.status === 401 && token) await clearNativeToken(token);
 	const body = (await res.json().catch(() => null)) as {
 		error?: { code: string; message: string; details?: unknown };
 	} | null;
@@ -235,6 +248,19 @@ export const api = {
 			}>;
 		}>("/plans"),
 	...tagalongApi(),
+	/** Phase 6: push preferences, one toggle per kind. */
+	notificationPrefs: () => request<NotificationPrefs>("/me/notifications"),
+	setNotificationPrefs: (update: NotificationPrefsUpdate) =>
+		request<NotificationPrefs>("/me/notifications", {
+			method: "POST",
+			body: JSON.stringify(update),
+		}),
+	/** Native only: a one-time ticket for the chat socket (the app has no cookie). */
+	chatTicket: (kind: RoomKind, id: string) =>
+		request<{ ticket: string; expires_at: string }>("/chat/ticket", {
+			method: "POST",
+			body: JSON.stringify({ kind, id }),
+		}),
 	signInUrl: () =>
 		`${API_BASE}/auth/google/start?return_to=${encodeURIComponent(window.location.href)}`,
 };

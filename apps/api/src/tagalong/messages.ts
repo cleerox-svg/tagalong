@@ -11,6 +11,7 @@ import type { ChatMessage, RoomKind } from "@tagalong/shared";
 import { messageCursor, parseMessageCursor, SendMessageSchema } from "@tagalong/shared";
 import { broadcast, type Defer } from "../chat/notify.js";
 import { HttpError, invalidInput, newId, nowIso } from "../lib/http.js";
+import { messageEvent, notify } from "../push/dispatch.js";
 import { NOT_BLOCKED, type TagalongUser } from "./access.js";
 import { checkMessageBody, limitMessage } from "./limits.js";
 
@@ -157,6 +158,7 @@ export async function sendMessage(
 		is_me: true,
 	};
 	defer(broadcast(env, kind, roomId, { type: "message", message }, u.id));
+	notify(env, defer, messageEvent(kind, roomId, u.id));
 	return message;
 }
 

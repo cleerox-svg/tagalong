@@ -1,9 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, type Me } from "./api.js";
 import { Connections, Profile } from "./Connections.js";
 import { Dm } from "./Dm.js";
 import { Group } from "./Group.js";
 import { Moderation } from "./Moderation.js";
+import {
+	attachPushListeners,
+	isNative,
+	NativeSignInError,
+	nativeSignIn,
+	nativeSignOut,
+	syncPush,
+} from "./native.js";
+import { Notifications } from "./Notifications.js";
 import { Onboarding } from "./Onboarding.js";
 import { Planner } from "./Planner.js";
 import { PlanView } from "./PlanView.js";
@@ -30,6 +39,9 @@ export function App() {
 	const load = useCallback(async () => {
 		try {
 			setSession({ state: "in", me: await api.me() });
+			// In the app: refresh this device's push registration if push is
+			// already allowed. Never asks for permission here.
+			if (isNative()) void syncPush().catch(() => undefined);
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 401) setSession({ state: "signed_out" });
 			else
@@ -41,6 +53,8 @@ export function App() {
 	}, []);
 
 	useEffect(() => {
+		// In the app, catch notification taps (including the one that launched it).
+		if (isNative()) void attachPushListeners();
 		void load();
 	}, [load]);
 
@@ -80,6 +94,7 @@ export function App() {
 				</RequireTagalong>
 			);
 		if (path === "/mod") return <Moderation />;
+		if (path === "/notifications") return <Notifications />;
 		return null;
 	})();
 
@@ -107,6 +122,13 @@ export function App() {
 								>
 									Tagalong
 								</a>
+								<a
+									href="/notifications"
+									onClick={linkTo("/notifications")}
+									aria-current={path === "/notifications" ? "page" : undefined}
+								>
+									Notifications
+								</a>
 								{session.me.is_moderator && (
 									<a
 										href="/mod"
@@ -122,7 +144,8 @@ export function App() {
 								type="button"
 								className="link"
 								onClick={async () => {
-									await api.logout().catch(() => undefined);
+									if (isNative()) await nativeSignOut();
+									else await api.logout().catch(() => undefined);
 									setSession({ state: "signed_out" });
 								}}
 							>
@@ -144,9 +167,7 @@ export function App() {
 								find the event and build up to five trip packages — tickets, travel, a place to stay
 								and things to do — that come in under budget, including the costs people forget.
 							</p>
-							<a className="button primary" href={api.signInUrl()}>
-								Sign in with Google
-							</a>
+							<SignIn onSignedIn={load} />
 						</section>
 					)}
 					{!sharedMatch && session.state === "in" && !session.me.birthdate_verified_18 && (
@@ -172,5 +193,54 @@ export function App() {
 				</footer>
 			</div>
 		</MeContext.Provider>
+	);
+}
+
+/** The browser goes to Google and back; the app signs in through the system browser. */
+function SignIn({ onSignedIn }: { onSignedIn: () => Promise<void> }) {
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	// Tapping again restarts sign-in (say the browser was dismissed unnoticed);
+	// only the latest attempt reports back.
+	const attempt = useRef(0);
+	if (!isNative())
+		return (
+			<a className="button primary" href={api.signInUrl()}>
+				Sign in with Google
+			</a>
+		);
+	return (
+		<>
+			<button
+				type="button"
+				className="primary"
+				aria-busy={busy}
+				onClick={async () => {
+					const mine = ++attempt.current;
+					setBusy(true);
+					setError(null);
+					try {
+						await nativeSignIn();
+						if (mine === attempt.current) await onSignedIn();
+					} catch (err) {
+						if (mine === attempt.current)
+							setError(
+								err instanceof NativeSignInError
+									? err.message
+									: "We couldn't sign you in. Try again.",
+							);
+					} finally {
+						if (mine === attempt.current) setBusy(false);
+					}
+				}}
+			>
+				{busy ? "Signing in…" : "Sign in with Google"}
+			</button>
+			{error && (
+				<p className="error" role="alert">
+					{error}
+				</p>
+			)}
+		</>
 	);
 }

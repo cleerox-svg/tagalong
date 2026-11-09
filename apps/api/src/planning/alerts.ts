@@ -8,6 +8,7 @@ import { formatMoney } from "@tagalong/shared";
 import { newId, nowIso } from "../lib/http.js";
 import { WEB_ORIGIN } from "../lib/share.js";
 import { sendEmail } from "../providers/resend.js";
+import { dispatchPush } from "../push/dispatch.js";
 import { runPlan } from "./run.js";
 import { cheapestTotal } from "./view.js";
 
@@ -126,6 +127,7 @@ export async function checkSavedTrips(
 			)
 			.run();
 		alerts++;
+		await dispatchPush(env, { kind: "price_drop", alertId }); // never throws; no-op without FCM
 
 		if (!env.RESEND_API_KEY) continue; // recorded and shown in the app; no email until the key is set
 		const name = trip.event_name ?? trip.event_query;

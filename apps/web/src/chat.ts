@@ -9,6 +9,7 @@
 import { messageCursor, type ChatEvent, type ChatMessage, type RoomKind } from "@tagalong/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, API_BASE, ApiError } from "./api.js";
+import { isNative } from "./native.js";
 
 // ---------------------------------------------------------------------------
 // Pure state.
@@ -153,6 +154,14 @@ export function chatSocketUrl(apiBase: string, kind: RoomKind, id: string): stri
 		.replace(/^http(s?):\/\//i, (_m, s: string) => `ws${s}://`)
 		.replace(/\/$/, "");
 	return `${base}/chat/${kind}/${encodeURIComponent(id)}/ws`;
+}
+
+/**
+ * Add a socket ticket to the chat URL. The app has no session cookie, so it
+ * fetches a one-time ticket (`POST /chat/ticket`) before every connect.
+ */
+export function withTicket(url: string, ticket: string): string {
+	return `${url}${url.includes("?") ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`;
 }
 
 /** Reconnect delay: 1s, 2s, 4s … capped at 30s. `jitter` is in [0, 1). */
@@ -356,9 +365,35 @@ export function useChat(kind: RoomKind, id: string): UseChat {
 		const connect = () => {
 			reconnectTimer = undefined;
 			if (stopped || dead || socketRefused) return;
+			const url = chatSocketUrl(API_BASE, kind, id);
+			if (!isNative()) {
+				openSocket(url);
+				return;
+			}
+			// In the app: a fresh one-time ticket for every attempt.
+			void (async () => {
+				let ticket: string | undefined;
+				try {
+					ticket = (await api.chatTicket(kind, id))?.ticket;
+				} catch {
+					ticket = undefined;
+				}
+				if (stopped || dead || socketRefused) return;
+				if (typeof ticket === "string" && ticket) {
+					openSocket(withTicket(url, ticket));
+					return;
+				}
+				// Polling finds out whether we lost access (and stops if so).
+				void catchUp();
+				startPolling();
+				scheduleReconnect();
+			})();
+		};
+
+		const openSocket = (url: string) => {
 			let ws: WebSocket;
 			try {
-				ws = new WebSocket(chatSocketUrl(API_BASE, kind, id));
+				ws = new WebSocket(url);
 			} catch {
 				void catchUp();
 				startPolling();
