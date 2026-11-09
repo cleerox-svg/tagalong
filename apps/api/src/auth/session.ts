@@ -7,9 +7,6 @@ import { hasBearer } from "../lib/security.js";
 export const SESSION_COOKIE = "tg_session";
 export const SESSION_DAYS = 30;
 
-/** Any context whose bindings are our Env (AppEnv, TgEnv). */
-type AnyCtx = Context<{ Bindings: Env }>;
-
 export function secret(env: Env): string {
 	if (!env.SESSION_SECRET || env.SESSION_SECRET.length < 32) {
 		// Fail closed: a missing or short secret must never mean "unsigned".
@@ -34,7 +31,10 @@ export const b64url = (bytes: ArrayBuffer | Uint8Array): string =>
 const fromB64url = (s: string): Uint8Array | null => {
 	if (!/^[A-Za-z0-9_-]*$/.test(s)) return null;
 	try {
-		const b64 = s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=");
+		const b64 = s
+			.replace(/-/g, "+")
+			.replace(/_/g, "/")
+			.padEnd(Math.ceil(s.length / 4) * 4, "=");
 		return Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
 	} catch {
 		return null;
@@ -138,7 +138,7 @@ async function bearerUserId(env: Env, authorization: string): Promise<string | n
  * the ONLY credential considered (a bad one never falls back to the cookie);
  * otherwise the session cookie as before.
  */
-export async function sessionUserId(c: AnyCtx): Promise<string | null> {
+export async function sessionUserId<E extends AppEnv>(c: Context<E>): Promise<string | null> {
 	const authorization = c.req.header("Authorization");
 	if (authorization !== undefined) {
 		return hasBearer(authorization) ? bearerUserId(c.env, authorization) : null;
@@ -153,11 +153,16 @@ export async function assertUserExists(db: D1Database, userId: string): Promise<
 	if (!row) throw new HttpError(401, "signed_out", "Sign in first.");
 }
 
-export const requireUser = createMiddleware<AppEnv>(async (c, next) => {
+/** The signed-in user's id (bearer or cookie, see sessionUserId) for an existing account; else 401. */
+export async function authenticate<E extends AppEnv>(c: Context<E>): Promise<string> {
 	const userId = await sessionUserId(c);
 	if (!userId) throw new HttpError(401, "signed_out", "Sign in first.");
 	await assertUserExists(c.env.DB, userId);
-	c.set("userId", userId);
+	return userId;
+}
+
+export const requireUser = createMiddleware<AppEnv>(async (c, next) => {
+	c.set("userId", await authenticate(c));
 	return next();
 });
 

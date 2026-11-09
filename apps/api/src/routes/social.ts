@@ -14,6 +14,7 @@ import {
 } from "@tagalong/shared";
 import { deferOf, kick } from "../chat/notify.js";
 import { HttpError, newId, nowIso, readJson } from "../lib/http.js";
+import { connectionEvent, notify } from "../push/dispatch.js";
 import {
 	adult,
 	isActiveTagalongUser,
@@ -145,7 +146,9 @@ social.post("/connections", ...member, async (c) => {
 		.bind(newId(), lo, hi, u.id, nowIso(), lo, hi, hi, lo)
 		.first<{ id: string }>();
 	if (!row) throw notFound;
-	return c.json({ connection: await connectionView(db, row.id, u.id) });
+	const connection = await connectionView(db, row.id, u.id);
+	notify(c.env, deferOf(c), connectionEvent(connection, u.id));
+	return c.json({ connection });
 });
 
 /** Respond to a request someone else made. */
@@ -169,7 +172,9 @@ async function respond(c: import("hono").Context<TgEnv>, to: "accepted" | "decli
 		.run();
 	if (!res.meta.changes)
 		throw new HttpError(409, "not_pending", "There's no request waiting for your answer.");
-	return c.json({ connection: await connectionView(db, conn.id, u.id) });
+	const connection = await connectionView(db, conn.id, u.id);
+	notify(c.env, deferOf(c), connectionEvent(connection, u.id));
+	return c.json({ connection });
 }
 
 social.post("/connections/:id/accept", ...member, (c) => respond(c, "accepted"));

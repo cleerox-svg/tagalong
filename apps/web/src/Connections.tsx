@@ -5,6 +5,7 @@ import { BackLink, ErrorCard } from "./ErrorCard.js";
 import { linkTo } from "./router.js";
 import { ConfirmDialog, PersonActions, useSafetyGate } from "./SafetyActions.js";
 import { useMe } from "./TagalongGate.js";
+import { askForPushInContext } from "./native.js";
 
 const errText = (err: unknown) =>
 	err instanceof ApiError ? err.message : "That didn't go through. Try again.";
@@ -132,7 +133,13 @@ export function Connections() {
 									aria-label={`Accept ${c.other_name}`}
 									onClick={() =>
 										void gate
-											.run(() => act(c.id, () => api.acceptConnection(c.id)))
+											.run(() =>
+												act(c.id, async () => {
+													const res = await api.acceptConnection(c.id);
+													askForPushInContext();
+													return res;
+												}),
+											)
 											.catch((err: unknown) => setActionError(errText(err)))
 									}
 								>

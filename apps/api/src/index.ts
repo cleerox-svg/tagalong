@@ -6,6 +6,7 @@ import { health } from "./routes/health.js";
 import { events } from "./routes/events.js";
 import { plans } from "./routes/plans.js";
 import { trips } from "./routes/trips.js";
+import { push } from "./routes/push.js";
 import { chat } from "./routes/chat.js";
 import { groups } from "./routes/groups.js";
 import { moderation } from "./routes/moderation.js";
@@ -34,6 +35,8 @@ app.route("/", groups);
 app.route("/", social);
 app.route("/", chat);
 app.route("/", moderation);
+// Signed in: push devices and notification preferences (phase 6).
+app.route("/", push);
 
 app.notFound((c) => c.json(errorBody("not_found", "No such route."), 404));
 

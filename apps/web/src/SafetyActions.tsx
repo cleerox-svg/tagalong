@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "./api.js";
 import { useMe } from "./TagalongGate.js";
+import { askForPushInContext } from "./native.js";
 
 const errText = (err: unknown) =>
 	err instanceof ApiError
@@ -424,7 +425,10 @@ export function PersonActions({
 				const res = await api.connect(userId);
 				const status = res?.connection?.status;
 				setResult(status === "pending" || status === "accepted" ? status : "failed");
-				if (res?.connection) onConnected?.(res.connection);
+				if (res?.connection) {
+					askForPushInContext();
+					onConnected?.(res.connection);
+				}
 			} catch (err) {
 				if (err instanceof ApiError && err.code === "safety_ack_required") throw err;
 				setError(errText(err));
