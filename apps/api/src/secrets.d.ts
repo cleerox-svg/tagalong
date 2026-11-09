@@ -25,6 +25,12 @@ interface WorkerSecrets {
 	EVENTBRITE_TOKEN?: string;
 	/** Phase 3 price-drop emails. Optional: without it alerts are shown in the app only. */
 	RESEND_API_KEY?: string;
+	/**
+	 * Phase 6 mobile push. Optional: the whole Google service-account JSON
+	 * (project_id, client_email, private_key) for Firebase Cloud Messaging.
+	 * Without it no push is sent; a malformed value is treated as unset.
+	 */
+	FCM_SERVICE_ACCOUNT_JSON?: string;
 }
 
 declare namespace Cloudflare {

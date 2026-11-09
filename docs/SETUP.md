@@ -144,6 +144,43 @@ setup is needed: the first deploy that includes it creates the class from the
 `v1` entry under `migrations` in `apps/api/wrangler.jsonc`. That list is
 append-only, like `/migrations`: never edit or remove a tag.
 
+## 1f. Mobile push (phase 6)
+
+Optional. Push notifications on the Android and iOS apps go through Firebase
+Cloud Messaging (FCM HTTP v1); Firebase relays iOS notifications to APNs.
+Without the secret below nothing is pushed and the app works as before.
+
+1. console.firebase.google.com → **Add project** (Analytics not needed). In
+   that project add an **Android app** and an **iOS app** with the
+   Capacitor app id, `com.averrow.budgetrip` (`apps/web/capacitor.config.ts`),
+   as both the Android package name and the iOS bundle id.
+2. Firebase console → Project settings → **Cloud Messaging** → Apple app
+   configuration → upload an **APNs authentication key** (`.p8`, from
+   developer.apple.com → Certificates, IDs & Profiles → Keys, with Apple Push
+   Notifications service enabled) with its Key ID and your Team ID.
+3. console.cloud.google.com (same project) → IAM & Admin → **Service
+   accounts** → create one (e.g. `tagalong-push`) with only the **Firebase
+   Cloud Messaging API Admin** role (`roles/firebasecloudmessaging.admin`).
+   Keys → Add key → JSON, and save the file outside the repository.
+4. Store the whole JSON file as the Worker secret, then delete the local copy:
+
+```sh
+cd apps/api
+pnpm exec wrangler secret put FCM_SERVICE_ACCOUNT_JSON < /path/to/service-account.json
+```
+
+| Secret                     | Where it comes from                                                                     |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| `FCM_SERVICE_ACCOUNT_JSON` | The service-account JSON key from step 3 (`project_id`, `client_email`, `private_key`). |
+
+A value that is not valid JSON, or lacks one of those fields, is treated as
+unset: pushes are skipped and the Worker logs why (never the key itself).
+
+5. For local native builds, download the Firebase app config files and put
+   them in the native projects: `google-services.json` in `apps/web/android/app/`
+   and `GoogleService-Info.plist` in `apps/web/ios/App/App/`. They are
+   gitignored; **never commit them**. Each developer keeps their own copy.
+
 ## 2. GitHub repository secrets
 
 Settings → Secrets and variables → Actions → **Secrets**:

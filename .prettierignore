@@ -7,3 +7,6 @@ coverage/
 apps/api/worker-configuration.d.ts
 # The build spec is kept exactly as written by its author.
 docs/BUILD_SPEC.md
+# Capacitor native projects - generated, formatted by their own toolchains.
+apps/web/android/
+apps/web/ios/
