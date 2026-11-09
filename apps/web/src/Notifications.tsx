@@ -91,8 +91,7 @@ export function Notifications() {
 				<PushStatus />
 			) : (
 				<p className="note">
-					Push notifications are available in the Budgetrip app. What you choose here applies
-					there.
+					Push notifications are available in the Budgetrip app. What you choose here applies there.
 				</p>
 			)}
 			{loadError && (

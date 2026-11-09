@@ -13,6 +13,7 @@
  * memory, and the PKCE verifier only in memory for the length of one sign-in.
  */
 import { isSafeAppPath, NativeAuthExchangeSchema, type DevicePlatform } from "@tagalong/shared";
+import type { FirebaseMessagingPlugin } from "@capacitor-firebase/messaging";
 import { navigate } from "./router.js";
 
 const API_BASE = __API_BASE__;
@@ -345,8 +346,21 @@ export function resetNativeStateForTests(): void {
 
 export type PushPermission = "granted" | "denied" | "prompt" | "unsupported";
 
-const messaging = async () =>
-	(await import("@capacitor-firebase/messaging")).FirebaseMessaging;
+let messagingPlugin: FirebaseMessagingPlugin | null = null;
+
+/**
+ * The native FirebaseMessaging plugin. Registered straight through
+ * @capacitor/core rather than by importing the package: its entry also wires a
+ * web implementation that needs the Firebase web SDK, which the PWA
+ * deliberately doesn't ship. In the app the native side answers every call.
+ */
+async function messaging(): Promise<FirebaseMessagingPlugin> {
+	if (!messagingPlugin) {
+		const { registerPlugin } = await import("@capacitor/core");
+		messagingPlugin = registerPlugin<FirebaseMessagingPlugin>("FirebaseMessaging");
+	}
+	return messagingPlugin;
+}
 
 /** The FCM token we registered, so sign-out can unregister it. */
 let pushToken: string | null = null;

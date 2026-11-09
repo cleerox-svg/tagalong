@@ -19,8 +19,14 @@
  *
  * Nothing here throws: a failure is logged and recorded on the device row.
  */
-import { formatMoney, isSafeAppPath, type Connection, type RoomKind } from "@tagalong/shared";
-import { DEFAULT_NOTIFICATION_PREFS, type NotificationKind } from "@tagalong/shared";
+import {
+	DEFAULT_NOTIFICATION_PREFS,
+	formatMoney,
+	isSafeAppPath,
+	type Connection,
+	type NotificationKind,
+	type RoomKind,
+} from "@tagalong/shared";
 import { roomAudience, type Defer } from "../chat/notify.js";
 import { nowIso } from "../lib/http.js";
 import { isPushConfigured, sendPush, type PushResult } from "../providers/fcm.js";

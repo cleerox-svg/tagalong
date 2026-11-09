@@ -79,7 +79,7 @@ afterEach(() => {
 
 describe("PKCE (RFC 7636)", () => {
 	it("matches the appendix B S256 test vector", async () => {
-		expect(await pkceChallenge("dBjftJeZ4CVP-mJ92K9qjgGGAa-1A0fsazOgHsZcMgk")).toBe(
+		expect(await pkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")).toBe(
 			"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
 		);
 	});
@@ -89,7 +89,8 @@ describe("PKCE (RFC 7636)", () => {
 			116, 24, 223, 180, 151, 153, 224, 37, 79, 250, 96, 125, 216, 173, 187, 186, 22, 212, 37, 77,
 			105, 214, 191, 240, 91, 88, 5, 88, 83, 132, 141, 121,
 		];
-		expect(base64url(new Uint8Array(octets))).toBe("dBjftJeZ4CVP-mJ92K9qjgGGAa-1A0fsazOgHsZcMgk");
+		expect(base64url(new Uint8Array(octets))).toBe("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk");
+		expect(base64url(new Uint8Array([251, 255]))).toBe("-_8");
 	});
 
 	it("makes 43-char unreserved verifiers, different each time", () => {
@@ -108,7 +109,10 @@ describe("PKCE (RFC 7636)", () => {
 
 describe("parseAuthCallback", () => {
 	it("reads a valid code", () => {
-		expect(parseAuthCallback(`${AUTH_CALLBACK}?code=${CODE}`)).toEqual({ kind: "code", code: CODE });
+		expect(parseAuthCallback(`${AUTH_CALLBACK}?code=${CODE}`)).toEqual({
+			kind: "code",
+			code: CODE,
+		});
 	});
 
 	it("reads an error code, never echoing anything odd", () => {
