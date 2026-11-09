@@ -1,0 +1,10 @@
+[
+	{
+		"relation": ["delegate_permission/common.handle_all_urls"],
+		"target": {
+			"namespace": "android_app",
+			"package_name": "com.averrow.budgetrip",
+			"sha256_cert_fingerprints": ["REPLACE_RELEASE_SHA256", "REPLACE_DEBUG_SHA256"]
+		}
+	}
+]

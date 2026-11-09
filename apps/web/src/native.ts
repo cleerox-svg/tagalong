@@ -177,7 +177,15 @@ export async function pkceChallenge(verifier: string): Promise<string> {
 // The sign-in callback.
 // ---------------------------------------------------------------------------
 
-export const AUTH_CALLBACK = "com.averrow.budgetrip://auth/callback";
+/**
+ * Where the API sends the app after sign-in: an HTTPS link on our own domain,
+ * delivered to the app by Android App Links / iOS Universal Links (verified
+ * through /.well-known on that domain). No custom URL scheme: any app could
+ * claim one and catch the code.
+ */
+export const AUTH_CALLBACK_ORIGIN = "https://tagalong.averrow.com";
+export const AUTH_CALLBACK_PATH = "/auth/app-callback";
+export const AUTH_CALLBACK = `${AUTH_CALLBACK_ORIGIN}${AUTH_CALLBACK_PATH}`;
 
 export type AuthCallback =
 	| { kind: "code"; code: string }
@@ -192,11 +200,25 @@ const CODE_SCHEMA = NativeAuthExchangeSchema.shape.code;
  * (another deep link), so the caller leaves it alone.
  */
 export function parseAuthCallback(url: string): AuthCallback | null {
+	// Exactly our origin and path, character for character: no other scheme,
+	// host, port, userinfo, case variant, trailing slash or extra segment.
 	if (typeof url !== "string" || !url.startsWith(AUTH_CALLBACK)) return null;
 	const rest = url.slice(AUTH_CALLBACK.length);
 	if (rest !== "" && rest[0] !== "?" && rest[0] !== "#") return null;
-	const query = rest.startsWith("?") ? (rest.slice(1).split("#")[0] ?? "") : "";
-	const params = new URLSearchParams(query);
+	let parsedUrl: URL;
+	try {
+		parsedUrl = new URL(url);
+	} catch {
+		return null;
+	}
+	if (
+		parsedUrl.origin !== AUTH_CALLBACK_ORIGIN ||
+		parsedUrl.pathname !== AUTH_CALLBACK_PATH ||
+		parsedUrl.username !== "" ||
+		parsedUrl.password !== ""
+	)
+		return null;
+	const params = parsedUrl.searchParams;
 	const codes = params.getAll("code");
 	const errors = params.getAll("error");
 	if (codes.length === 1 && errors.length === 0) {
@@ -213,7 +235,7 @@ export function parseAuthCallback(url: string): AuthCallback | null {
 /** What a failed sign-in tells the person. Never echoes the callback text. */
 export function signInErrorMessage(error: string): string {
 	if (error === "cancelled") return "Sign-in was cancelled.";
-	if (error === "access_denied") return "Google sign-in was cancelled or not allowed.";
+	if (error === "access_denied") return "Sign-in was cancelled or not allowed.";
 	return "We couldn't sign you in. Try again.";
 }
 
@@ -275,12 +297,14 @@ export async function handleAuthUrl(url: string): Promise<void> {
 	}
 }
 
+export type SignInProvider = "google" | "apple";
+
 /**
- * Sign in with Google in the system browser. Resolves once a session token is
+ * Sign in with Google or Apple in the system browser. Resolves once a session token is
  * stored; rejects with a `NativeSignInError` (its message is safe to show).
  * Starting again while one is pending cancels the old one.
  */
-export async function nativeSignIn(): Promise<void> {
+export async function nativeSignIn(provider: SignInProvider): Promise<void> {
 	if (pending) {
 		const old = pending;
 		pending = null;
@@ -321,7 +345,8 @@ export async function nativeSignIn(): Promise<void> {
 				}, BROWSER_CLOSED_GRACE_MS);
 			}),
 		);
-		const url = `${API_BASE}/auth/google/start?native=1&code_challenge=${encodeURIComponent(challenge)}`;
+		const start = provider === "apple" ? "/auth/apple/start" : "/auth/google/start";
+		const url = `${API_BASE}${start}?native=1&code_challenge=${encodeURIComponent(challenge)}`;
 		Browser.open({ url, presentationStyle: "popover" }).catch(() => {
 			if (pending !== me) return;
 			pending = null;
@@ -575,6 +600,24 @@ export async function nativeSignOut(): Promise<void> {
 		}
 	}
 	await nativePost("/auth/logout", {}).catch(() => undefined);
+	await clearNativeToken();
+	await rememberPushToken(null);
+}
+
+/**
+ * After the account was deleted: forget the session token and the push token,
+ * here and in secure storage, and any sign-in in progress. Never calls the
+ * API: the server already deleted the session and this device's
+ * registration, so unregister / logout would only get a 401.
+ */
+export async function nativeAfterAccountDeleted(): Promise<void> {
+	if (pending) {
+		const old = pending;
+		pending = null;
+		old.cleanup();
+		old.reject(new NativeSignInError("cancelled"));
+	}
+	loading = null;
 	await clearNativeToken();
 	await rememberPushToken(null);
 }

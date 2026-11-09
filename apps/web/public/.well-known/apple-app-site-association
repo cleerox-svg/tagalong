@@ -1,0 +1,10 @@
+{
+	"applinks": {
+		"details": [
+			{
+				"appIDs": ["REPLACE_TEAM_ID.com.averrow.budgetrip"],
+				"components": [{ "/": "/auth/app-callback*", "comment": "native sign-in return" }]
+			}
+		]
+	}
+}
