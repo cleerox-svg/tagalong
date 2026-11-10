@@ -12,7 +12,8 @@
 		"deploy": "wrangler deploy",
 		"cap:sync": "pnpm build && cap sync",
 		"cap:open:ios": "cap open ios",
-		"cap:open:android": "cap open android"
+		"cap:open:android": "cap open android",
+		"assets:generate": "sh scripts/generate-native-assets.sh"
 	},
 	"dependencies": {
 		"@capacitor-firebase/messaging": "catalog:",

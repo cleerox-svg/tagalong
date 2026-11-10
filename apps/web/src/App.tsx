@@ -6,6 +6,8 @@ import { APP_CALLBACK_PATH, AppCallback } from "./AppCallback.js";
 import { Connections, Profile } from "./Connections.js";
 import { Dm } from "./Dm.js";
 import { Group } from "./Group.js";
+import { AgreeNote, LegalLinks, legalPage } from "./Legal.js";
+import { shouldLoadSession } from "./legal-path.js";
 import { Moderation } from "./Moderation.js";
 import {
 	attachPushListeners,
@@ -63,8 +65,16 @@ export function App() {
 	useEffect(() => {
 		// In the app, catch notification taps (including the one that launched it).
 		if (isNative()) void attachPushListeners();
+	}, []);
+
+	// The public legal pages make no account request on a cold load; the
+	// session is first read when the person moves on to any other page.
+	const loadStarted = useRef(false);
+	useEffect(() => {
+		if (!shouldLoadSession(path, loadStarted.current)) return;
+		loadStarted.current = true;
 		void load();
-	}, [load]);
+	}, [path, load]);
 
 	const me = session.state === "in" ? session.me : null;
 
@@ -88,7 +98,10 @@ export function App() {
 	const sharedMatch = /^\/s\/([A-Za-z0-9_-]{43})$/.exec(path);
 	// The native sign-in link opened in a browser: always shown, signed in or not.
 	const appCallback = path === APP_CALLBACK_PATH;
-	const publicPage = sharedMatch?.[1] ? (
+	const legal = legalPage(path);
+	const publicPage = legal ? (
+		legal
+	) : sharedMatch?.[1] ? (
 		<PlanView token={sharedMatch[1]} />
 	) : appCallback ? (
 		<AppCallback />
@@ -202,6 +215,7 @@ export function App() {
 								and things to do — that come in under budget, including the costs people forget.
 							</p>
 							<SignIn onSignedIn={load} />
+							<AgreeNote />
 						</section>
 					)}
 					{!publicPage && session.state === "in" && path === "/account" && (
@@ -228,8 +242,11 @@ export function App() {
 				</main>
 
 				<footer className="foot muted">
-					Budgetrip links out to the real sellers and never takes payment. Numbers marked{" "}
-					<em>estimate</em> are rules of thumb, not quotes — check the price when you book.
+					<p>
+						Budgetrip links out to the real sellers and never takes payment. Numbers marked{" "}
+						<em>estimate</em> are rules of thumb, not quotes — check the price when you book.
+					</p>
+					<LegalLinks path={path} />
 				</footer>
 			</div>
 		</MeContext.Provider>

@@ -8,7 +8,7 @@ import {
 } from "@tagalong/shared";
 import { z } from "zod";
 import { HttpError, newId, nowIso, readJson, type AppEnv } from "../lib/http.js";
-import { rateLimit } from "../lib/rate-limit.js";
+import { rateLimitByIp } from "../lib/rate-limit.js";
 import { requireTrustedWrite, WEB_ORIGINS } from "../lib/security.js";
 import {
 	isModerator,
@@ -99,7 +99,7 @@ async function signInLimit(
 	const ip = c.req.header("CF-Connecting-IP");
 	if (!ip) return null;
 	try {
-		await rateLimit(c.env.DB, `signin:${endpoint}:${ip}`, SIGN_IN_LIMIT, 60);
+		await rateLimitByIp(c.env.DB, `signin:${endpoint}`, ip, SIGN_IN_LIMIT, 60);
 		return null;
 	} catch (err) {
 		if (isNative && err instanceof HttpError && err.code === "rate_limited")

@@ -11,6 +11,7 @@ import {
 	signedInAs,
 } from "./account.js";
 import { api, type Me } from "./api.js";
+import { PageLink } from "./Legal.js";
 import { Modal } from "./SafetyActions.js";
 
 export function Account({
@@ -73,6 +74,11 @@ export function Account({
 					</li>
 					<li>Reports you made or that were made about you</li>
 				</ul>
+				<p className="note account-legal">
+					Details in the <PageLink to="/privacy">Privacy Policy</PageLink> and{" "}
+					<PageLink to="/delete-account">what deleting keeps</PageLink>. See also the{" "}
+					<PageLink to="/terms">Terms of Use</PageLink>.
+				</p>
 
 				<form
 					className="account-confirm"

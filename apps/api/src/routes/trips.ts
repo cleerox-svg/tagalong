@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { requireUser } from "../auth/session.js";
 import { HttpError, LIVE_USER, nowIso, readJson, signedOut, type AppEnv } from "../lib/http.js";
-import { rateLimit } from "../lib/rate-limit.js";
+import { rateLimit, rateLimitByIp } from "../lib/rate-limit.js";
 import { requireTrustedWrite } from "../lib/security.js";
 import { newShareToken, SHARE_TOKEN_RE, shareUrl } from "../lib/share.js";
 import { cheapestTotal, loadPlan } from "../planning/view.js";
@@ -189,7 +189,7 @@ trips.post("/plans/:id/share/revoke", ...signedIn, async (c) => {
 trips.get("/shared/:token", async (c) => {
 	const token = c.req.param("token");
 	const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
-	await rateLimit(c.env.DB, `shared:${ip}`, 120, 60);
+	await rateLimitByIp(c.env.DB, "shared", ip, 120, 60);
 	c.header("Cache-Control", "no-store");
 	c.header("X-Robots-Tag", "noindex");
 	if (!SHARE_TOKEN_RE.test(token))

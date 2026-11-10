@@ -220,6 +220,8 @@ it is the page's own figure with the page named as its source.
 | 4 | **Any event** | Eventbrite + pasted URL planning, category browse ("gaming events near X in May"). |
 | 5 | **Tagalong** | Event groups, group chat (Durable Objects), mutual connect + DMs, block/report, moderation queue. |
 | 6 | **Mobile** | iOS/Android app (Capacitor), push notifications. |
+| 7 | **Store readiness** (done) | Sign in with Apple, in-app account deletion, verified HTTPS app sign-in link. |
+| 8 | **Store submission** | Native icons and splash screens, the iOS privacy manifest, native config hardening, public privacy/terms/support/delete-account pages, a store listing and data-safety doc, and an owner submission runbook are in the repo. |
 
 ## 10. Open decisions
 

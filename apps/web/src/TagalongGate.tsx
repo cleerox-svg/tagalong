@@ -4,8 +4,9 @@ import {
 	TAGALONG_NAME_MAX,
 	TagalongOptInSchema,
 } from "@tagalong/shared";
-import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import { createContext, useContext, useId, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, type Me } from "./api.js";
+import { PageLink } from "./Legal.js";
 
 /** The signed-in, age-confirmed user, and a way to re-read /me after a change. */
 export interface MeCtx {
@@ -39,30 +40,47 @@ export function TagalongGate({
 		me?.home_city && isCityLabel(me.home_city.trim()) ? me.home_city.trim() : "",
 	);
 	const [confirm, setConfirm] = useState(false);
+	const [agree, setAgree] = useState(false);
 	const [errors, setErrors] = useState<{ name?: string; city?: string; form?: string }>({});
+	/** The boxes left unticked at the last failed submit. */
+	const [unticked, setUnticked] = useState({ confirm: false, agree: false });
 	const [busy, setBusy] = useState(false);
 	const ids = useId();
+	const confirmRef = useRef<HTMLInputElement>(null);
+	const agreeRef = useRef<HTMLInputElement>(null);
 
 	if (!ctx || !me) return null;
 	if (me.tagalong.suspended) return <Suspended />;
 
+	const formErrId = `${ids}-form-err`;
+	/** A box is flagged while it is still unticked after a failed submit that named it. */
+	const boxInvalid = (wasUnticked: boolean, ticked: boolean) =>
+		wasUnticked && !ticked && Boolean(errors.form);
+
 	const submit = async (e: React.FormEvent) => {
 		e.preventDefault();
 		const parsed = TagalongOptInSchema.safeParse({ confirm, name, city });
-		if (!parsed.success) {
+		if (!parsed.success || !agree) {
+			const missing = { confirm: !confirm, agree: !agree };
 			const next: typeof errors = {};
-			for (const issue of parsed.error.issues) {
+			const boxes = boxesMessage(missing);
+			if (boxes) next.form = boxes;
+			for (const issue of parsed.success ? [] : parsed.error.issues) {
 				const field = issue.path[0];
 				if (field === "name")
 					next.name ??= `Use 1–${TAGALONG_NAME_MAX} characters, with no links or e-mail addresses.`;
 				else if (field === "city")
 					next.city ??= "Just a city name, like “Toronto” — no numbers, street or postcode.";
-				else if (field === "confirm") next.form ??= "Tick the box to confirm.";
+				// "confirm" fails only when unticked, which `missing` already names.
 			}
 			setErrors(next);
+			setUnticked(missing);
+			if (missing.confirm) confirmRef.current?.focus();
+			else if (missing.agree) agreeRef.current?.focus();
 			return;
 		}
 		setErrors({});
+		setUnticked({ confirm: false, agree: false });
 		setBusy(true);
 		try {
 			await api.tagalongOptIn(parsed.data);
@@ -93,6 +111,11 @@ export function TagalongGate({
 				</li>
 				<li>Tagalong is for adults only. You confirmed you're 18 or older when you signed up.</li>
 				<li>You can block or report anyone, and leave Tagalong at any time.</li>
+				<li>
+					<strong>Zero tolerance</strong> for objectionable content and abusive users. Reports go to
+					moderators, who can remove messages and suspend accounts. Read the{" "}
+					<PageLink to="/terms">Terms of Use</PageLink>.
+				</li>
 			</ul>
 			<form onSubmit={submit} noValidate>
 				<label>
@@ -133,11 +156,33 @@ export function TagalongGate({
 					)}
 				</label>
 				<label className="check">
-					<input type="checkbox" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} />
+					<input
+						ref={confirmRef}
+						type="checkbox"
+						checked={confirm}
+						onChange={(e) => setConfirm(e.target.checked)}
+						aria-invalid={boxInvalid(unticked.confirm, confirm) || undefined}
+						aria-describedby={boxInvalid(unticked.confirm, confirm) ? formErrId : undefined}
+					/>
 					I understand that this name and city will be shown to other Tagalong members.
 				</label>
+				<label className="check">
+					<input
+						ref={agreeRef}
+						type="checkbox"
+						checked={agree}
+						onChange={(e) => setAgree(e.target.checked)}
+						aria-invalid={boxInvalid(unticked.agree, agree) || undefined}
+						aria-describedby={boxInvalid(unticked.agree, agree) ? formErrId : undefined}
+					/>{" "}
+					I agree to the Terms of Use, including zero tolerance for objectionable content and
+					abusive users.
+				</label>
+				<p className="note check-link">
+					<PageLink to="/terms">Read the Terms of Use</PageLink>
+				</p>
 				{errors.form && (
-					<p className="error" role="alert">
+					<p id={formErrId} className="error" role="alert">
 						{errors.form}
 					</p>
 				)}
@@ -154,6 +199,15 @@ export function TagalongGate({
 			</form>
 		</section>
 	);
+}
+
+/** The join form's message for the boxes still unticked, naming the missing one. */
+export function boxesMessage(missing: { confirm: boolean; agree: boolean }): string | undefined {
+	if (missing.confirm && missing.agree) return "Tick both boxes to join.";
+	if (missing.agree) return "Tick the box to agree to the Terms of Use.";
+	if (missing.confirm)
+		return "Tick the box to confirm you understand your name and city will be shown to other Tagalong members.";
+	return undefined;
 }
 
 export function Suspended() {

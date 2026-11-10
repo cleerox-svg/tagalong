@@ -381,6 +381,9 @@ legend {
 .describe-row > button {
 	align-self: flex-start;
 }
+.ai-note {
+	margin: 12px 0 0;
+}
 .trip-form > fieldset + fieldset {
 	padding-top: 16px;
 	border-top: 1px solid var(--line-soft);
@@ -1326,4 +1329,69 @@ button.google-signin:hover:not(:disabled):not([aria-disabled="true"]) {
 .account-confirm button {
 	min-height: 44px;
 	margin-top: 6px;
+}
+
+/* ---- Legal and support pages (phase 8) ---- */
+.legal h2 {
+	margin-top: 28px;
+}
+.legal h3 {
+	margin: 18px 0 4px;
+	font-size: 1rem;
+}
+.legal p,
+.legal li {
+	line-height: 1.6;
+}
+.legal ul,
+.legal ol {
+	padding-left: 22px;
+}
+.legal li + li {
+	margin-top: 6px;
+}
+.legal a {
+	overflow-wrap: anywhere;
+}
+/* An owner placeholder, e.g. {{CONTROLLER}}: impossible to miss before submission. */
+.legal-fill {
+	background: var(--est);
+	color: var(--brand-ink);
+	padding: 0 4px;
+	border-radius: 4px;
+	font-weight: 700;
+}
+.foot p {
+	margin: 0;
+}
+.legal-links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 8px;
+	margin: 8px 0 0 -10px;
+}
+.legal-links a {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	min-width: 44px;
+	padding: 0 10px;
+	font-size: 0.875rem;
+}
+.agree-note {
+	margin: 12px 0 0;
+}
+.account-legal {
+	margin: 12px 0 0;
+}
+/* Links in these short notes get a taller tap target without changing the line height. */
+.agree-note a,
+.ai-note a,
+.account-legal a,
+.check-link a {
+	display: inline-block;
+	padding: 4px 0;
+}
+.check-link {
+	margin: -4px 0 12px;
 }
