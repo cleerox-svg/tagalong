@@ -90,6 +90,27 @@ describe("pruneRateLimits", () => {
 		expect(await exists(ip, NOW)).toBe(true);
 	});
 
+	it("deletes legacy unprefixed IP rows after 1 hour, keeping user-keyed look-alikes", async () => {
+		const legacy = [
+			`shared:${uniq("203.0.113.8")}`,
+			`native-exchange:${uniq("203.0.113.8")}`,
+			`signin:google:${uniq("203.0.113.8")}`,
+		];
+		for (const key of legacy) {
+			await insert(key, NOW - HOUR - 1);
+			await insert(key, NOW - 60);
+		}
+		// share:<userId> limits share-link creation per user (1-hour window); not an IP.
+		const share = `share:${uniq("user")}`;
+		await insert(share, NOW - 2 * HOUR);
+		await pruneRateLimits(env.DB, NOW_MS);
+		for (const key of legacy) {
+			expect(await exists(key, NOW - HOUR - 1)).toBe(false);
+			expect(await exists(key, NOW - 60)).toBe(true);
+		}
+		expect(await exists(share, NOW - 2 * HOUR)).toBe(true);
+	});
+
 	it("drains more rows than one batch", async () => {
 		const prefix = uniq("bulk");
 		const stmt = env.DB.prepare(
