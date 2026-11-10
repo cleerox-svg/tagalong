@@ -106,8 +106,8 @@ function Privacy() {
 				Effective <Fill>{EFFECTIVE_DATE}</Fill>
 			</p>
 			<p>
-				Budgetrip plans trips to events within a budget. Tagalong is its optional social layer.
-				This policy covers both, in the app and at tagalong.averrow.com.
+				Budgetrip plans trips to events within a budget. Tagalong is its optional social layer. This
+				policy covers both, in the app and at tagalong.averrow.com.
 			</p>
 
 			<h2>Who we are</h2>
@@ -118,7 +118,10 @@ function Privacy() {
 
 			<h2>The short version</h2>
 			<ul>
-				<li>No ads, no tracking and no analytics. There is no advertising, analytics or crash-reporting tool in the app.</li>
+				<li>
+					No ads, no tracking and no analytics. There is no advertising, analytics or
+					crash-reporting tool in the app.
+				</li>
 				<li>We don't sell or rent your data, and we don't use it for advertising.</li>
 				<li>
 					We collect what the app needs to work, send each service only what it needs, and you can
@@ -197,11 +200,11 @@ function Privacy() {
 
 			<h3>Security</h3>
 			<p>
-				To stop abuse, we count requests by IP address on sign-in, on the app's sign-in hand-off
-				and on public share links. These IP records are kept for at most 24 hours and aren't
-				linked to your account. Our host, Cloudflare, also records each request to our servers
-				(including its address and IP) in its logs, which we use to fix errors. Those logs are kept
-				for the period Cloudflare's logging service keeps them.
+				To stop abuse, we count requests by IP address on sign-in, on the app's sign-in hand-off and
+				on public share links. These IP records are kept for at most 24 hours and aren't linked to
+				your account. Our host, Cloudflare, also records each request to our servers (including its
+				address and IP) in its logs, which we use to fix errors. Those logs are kept for the period
+				Cloudflare's logging service keeps them.
 			</p>
 
 			<h2>Who handles your data for us</h2>
@@ -241,12 +244,12 @@ function Privacy() {
 					currency and your starting country).
 				</li>
 				<li>
-					<strong>Resend</strong>: price-drop emails (your email address, the event, the old and
-					new price and a link to your plan).
+					<strong>Resend</strong>: price-drop emails (your email address, the event, the old and new
+					price and a link to your plan).
 				</li>
 				<li>
-					<strong>Firebase Cloud Messaging</strong> (Google) and <strong>Apple Push Notification
-					service</strong>: delivering notifications to your device.
+					<strong>Firebase Cloud Messaging</strong> (Google) and{" "}
+					<strong>Apple Push Notification service</strong>: delivering notifications to your device.
 				</li>
 				<li>
 					<strong>Frankfurter</strong>: currency codes only, for exchange rates.
@@ -274,9 +277,7 @@ function Privacy() {
 			</ul>
 
 			<h2>How long we keep it</h2>
-			<p>
-				Your data stays until you delete it or delete your account, except for the following:
-			</p>
+			<p>Your data stays until you delete it or delete your account, except for the following:</p>
 			<ul>
 				<li>IP records for abuse prevention: at most 24 hours.</li>
 				<li>App sign-in codes: 60 seconds, single use.</li>
@@ -390,10 +391,8 @@ function Terms() {
 			<h2>Tagalong: community rules</h2>
 			<p>
 				Tagalong is optional, opt-in and for adults only. When you join, you agree to these rules.{" "}
-				<strong>
-					We have zero tolerance for objectionable content and abusive users.
-				</strong>{" "}
-				Don't post or send:
+				<strong>We have zero tolerance for objectionable content and abusive users.</strong> Don't
+				post or send:
 			</p>
 			<ul>
 				<li>harassment, bullying, threats or hate;</li>
@@ -404,9 +403,9 @@ function Terms() {
 			</ul>
 			<p>
 				Every message and profile has <strong>Report</strong> and <strong>Block</strong>. Blocking
-				hides you and that person from each other. Reports go to our moderators, who review them
-				and can remove content and suspend accounts from Tagalong. A suspension stays in place if
-				you delete your account and sign up again with the same Google or Apple account.
+				hides you and that person from each other. Reports go to our moderators, who review them and
+				can remove content and suspend accounts from Tagalong. A suspension stays in place if you
+				delete your account and sign up again with the same Google or Apple account.
 			</p>
 			<p>
 				We don't check who people are. If you meet anyone in person, meet in a public place, and
@@ -471,8 +470,8 @@ function Support() {
 			</ol>
 			<p>
 				Reports go to our moderators, who can remove messages and suspend accounts. You can also
-				email <Mail /> with the person's Tagalong name, the event group and what happened. If
-				anyone is in danger, contact your local emergency services first.
+				email <Mail /> with the person's Tagalong name, the event group and what happened. If anyone
+				is in danger, contact your local emergency services first.
 			</p>
 
 			<h2>Common questions</h2>
@@ -493,8 +492,8 @@ function Support() {
 			</p>
 			<h3>Does the AI set prices?</h3>
 			<p>
-				No. The AI only reads your trip description into the form, which you check. Prices come
-				from providers.
+				No. The AI only reads your trip description into the form, which you check. Prices come from
+				providers.
 			</p>
 			<h3>How do I stop price-drop emails or notifications?</h3>
 			<p>
@@ -524,8 +523,8 @@ function DeleteAccountInfo() {
 	return (
 		<LegalShell path="/delete-account">
 			<p>
-				You can delete your Budgetrip account, and the data under it, yourself at any time. It
-				takes effect straight away, signs you out on every device, and can't be undone.
+				You can delete your Budgetrip account, and the data under it, yourself at any time. It takes
+				effect straight away, signs you out on every device, and can't be undone.
 			</p>
 
 			<h2>In the app or on the web</h2>
@@ -560,9 +559,7 @@ function DeleteAccountInfo() {
 				<li>Your trips, plans, saved trips, share links (they stop working) and price alerts</li>
 				<li>Your registered devices, notification settings and pending sign-in codes</li>
 				<li>Your Tagalong group memberships and blocks</li>
-				<li>
-					Your messages: hidden from chat and their text replaced with "[message deleted]"
-				</li>
+				<li>Your messages: hidden from chat and their text replaced with "[message deleted]"</li>
 				<li>Your Sign in with Apple grant, which we ask Apple to revoke</li>
 			</ul>
 
@@ -579,18 +576,18 @@ function DeleteAccountInfo() {
 				</li>
 				<li>Your connections, closed, with who asked and when. Kept indefinitely.</li>
 				<li>
-					If your Tagalong access was suspended: that suspension, and a one-way coded fingerprint
-					of each Google or Apple account you signed in with (no email, name or account id), so a
-					new account from the same sign-in starts suspended from Tagalong. Kept indefinitely.
-					Nothing like this is kept for accounts that weren't suspended.
+					If your Tagalong access was suspended: that suspension, and a one-way coded fingerprint of
+					each Google or Apple account you signed in with (no email, name or account id), so a new
+					account from the same sign-in starts suspended from Tagalong. Kept indefinitely. Nothing
+					like this is kept for accounts that weren't suspended.
 				</li>
 				<li>
-					Events you described yourself (an event name, city and date) are stored for everyone,
-					not under your account, and aren't removed.
+					Events you described yourself (an event name, city and date) are stored for everyone, not
+					under your account, and aren't removed.
 				</li>
 				<li>
-					IP records for abuse prevention expire within 24 hours, and our host's request logs
-					follow its own retention period.
+					IP records for abuse prevention expire within 24 hours, and our host's request logs follow
+					its own retention period.
 				</li>
 			</ul>
 			<p>

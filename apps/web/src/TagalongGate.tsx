@@ -97,8 +97,8 @@ export function TagalongGate({
 				<li>Tagalong is for adults only. You confirmed you're 18 or older when you signed up.</li>
 				<li>You can block or report anyone, and leave Tagalong at any time.</li>
 				<li>
-					<strong>Zero tolerance</strong> for objectionable content and abusive users. Moderators
-					review every report and can remove messages and suspend accounts. Read the{" "}
+					<strong>Zero tolerance</strong> for objectionable content and abusive users. Reports go to
+					moderators, who can remove messages and suspend accounts. Read the{" "}
 					<PageLink to="/terms">Terms of Use</PageLink>.
 				</li>
 			</ul>

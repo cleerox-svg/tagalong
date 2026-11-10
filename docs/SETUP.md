@@ -302,6 +302,147 @@ from Tagalong (the rest of Budgetrip works as normal). Nothing is kept for
 accounts that were not suspended. Rotating `SESSION_SECRET` makes the stored
 hashes unmatchable.
 
+## 1i. Store submission (phase 8)
+
+Everything the store forms ask for (privacy labels, Data safety, listing
+copy, age rating, review notes) is in `docs/STORE_LISTING.md`, built from the
+code; this section is the order to do it in. Bundle id / package name:
+`com.averrow.budgetrip`. Contact: support@averrow.com.
+
+**Before either store (owner, open):**
+
+- Fill in the controller (`{{CONTROLLER}}`: the legal entity responsible for
+  the data, and its country) on /privacy and in Play's developer details.
+- Have /privacy and /terms legally reviewed before submitting
+  (`docs/STORE_LISTING.md` §8, open items 1 and 2).
+- Do the §1f fill-ins: the Team ID in `apple-app-site-association`, the
+  SHA-256 fingerprints in `assetlinks.json` (the Play **App signing key** one
+  comes from step 2 under Google below) and the WAF skip rule for
+  `/.well-known/`. Configure Sign in with Apple (§1g); without it the
+  reviewer's sign-in fails with `misconfigured`.
+
+**Build the web bundle into both native projects** (from the repo root):
+
+```sh
+pnpm --filter @tagalong/web cap:sync
+```
+
+**Icons and splash screens.** The source art is in `apps/web/assets/`. After
+changing it, regenerate the iOS and Android images and commit them:
+
+```sh
+pnpm --filter @tagalong/web assets:generate
+```
+
+**Version bump (every upload).** The user-visible version and the build
+number move together on both platforms:
+
+| Platform | Version shown to users                               | Build number (must rise on every upload) |
+| -------- | ---------------------------------------------------- | ---------------------------------------- |
+| iOS      | `MARKETING_VERSION` (Xcode: Version)                 | `CURRENT_PROJECT_VERSION` (Xcode: Build) |
+| Android  | `versionName` in `apps/web/android/app/build.gradle` | `versionCode` in the same file           |
+
+Set `MARKETING_VERSION` and `versionName` to the same value (e.g. `1.1`), and
+raise `CURRENT_PROJECT_VERSION` and `versionCode` together (e.g. both to `2`).
+In Xcode, change both the Debug and Release configurations (the target's
+General tab does that). Both stores reject an upload whose build number was
+already used.
+
+### Apple (App Store)
+
+1. **App ID capabilities.** developer.apple.com → Certificates, IDs &
+   Profiles → Identifiers → `com.averrow.budgetrip`: enable **Push
+   Notifications** and **Associated Domains** (§1f). Sign in with Apple is
+   also enabled there (§1g step 1) for the Services ID, but it runs as the
+   web flow in the system browser, so the app has **no** Sign in with Apple
+   entitlement (`apps/web/ios/App/App/App.entitlements` has only
+   `aps-environment` and `applinks:tagalong.averrow.com`).
+2. **App Store Connect record.** appstoreconnect.apple.com → Apps → **+** →
+   New App: platform iOS, name "Budgetrip by Tagalong", primary language,
+   bundle id `com.averrow.budgetrip`, an SKU of your choice.
+3. **Signing.** `pnpm --filter @tagalong/web cap:open:ios`, select the
+   **App** target → Signing & Capabilities: keep **Automatically manage
+   signing** on (`CODE_SIGN_STYLE = Automatic`) and pick your Team. The app
+   is **iPhone only** (`TARGETED_DEVICE_FAMILY = 1`); leave it that way.
+4. **Archive.** Scheme App, destination "Any iOS Device (arm64)" → Product →
+   **Archive**. In the Organizer, Product → Archive → Generate Privacy Report
+   and check it against `docs/STORE_LISTING.md` §3.
+5. **Check `aps-environment`.** The entitlements file in the repo says
+   `development`; the App Store distribution profile must turn that into
+   `production`, or push never arrives on store installs. In the Organizer
+   → **Distribute App** → App Store Connect → **Export** (instead of
+   Upload) once, unzip the `.ipa`, and run
+   `codesign -d --entitlements :- Payload/App.app`: it must show
+   `aps-environment` = `production`. Then distribute again with **Upload**.
+6. **TestFlight.** After processing (minutes to an hour) the build appears
+   under TestFlight. Answer the export-compliance question (the app uses only
+   standard HTTPS encryption), add yourself as an internal tester and check
+   sign-in (Google and Apple), planning, push and account deletion on a real
+   iPhone.
+7. **App Privacy.** App Store Connect → your app → App Privacy: enter
+   exactly `docs/STORE_LISTING.md` §2 (tracking: no; every type linked, not
+   tracking, App Functionality only, including Coarse Location). Privacy
+   policy URL `https://tagalong.averrow.com/privacy`.
+8. **Age rating.** Answer the questionnaire as in `docs/STORE_LISTING.md` §6
+   and choose **18+**.
+9. **Listing.** Name, subtitle, keywords, categories, description, support
+   and privacy URLs from §5. Screenshots: **6.9" iPhone only**; there are no
+   iPad screenshots because the app is iPhone only.
+10. **Review notes.** App Review Information → Notes: paste §7. Add a contact
+    (support@averrow.com). Then select the build and **Submit for Review**.
+
+### Google (Play)
+
+1. **Play Console app.** play.google.com/console → Create app: name
+   "Budgetrip by Tagalong", app (not game), free, accept the declarations.
+2. **Play App Signing** (on by default for new apps): Google holds the app
+   signing key and you sign uploads with an **upload key**. After the first
+   upload, copy the **App signing key** SHA-256 from Test and release → App
+   integrity → App signing into `assetlinks.json` (§1f).
+3. **Upload keystore, outside the repo.** Create it once and keep it (and its
+   passwords) in your password manager or a private backup; losing it means a
+   key reset request to Google:
+
+   ```sh
+   keytool -genkeypair -v -keystore ~/keys/budgetrip-upload.jks \
+     -alias upload -keyalg RSA -keysize 2048 -validity 10000
+   ```
+
+   The root `.gitignore` ignores `*.jks`, `*.keystore` and
+   `keystore.properties`, but keep the file outside the repository anyway.
+
+4. **Build the bundle.**
+
+   ```sh
+   cd apps/web/android
+   ./gradlew bundleRelease
+   ```
+
+   The bundle is `app/build/outputs/bundle/release/app-release.aab`.
+   `app/build.gradle` has no release signing config, so this bundle is
+   unsigned: sign it with the upload key before uploading, either with
+   `jarsigner -keystore ~/keys/budgetrip-upload.jks app/build/outputs/bundle/release/app-release.aab upload`
+   or by building it from Android Studio (`pnpm --filter @tagalong/web cap:open:android`
+   → Build → Generate Signed App Bundle, with the same keystore).
+
+5. **Internal testing.** Test and release → Testing → **Internal testing** →
+   create a release, upload the `.aab`, add testers by email, and check
+   sign-in, App Links (the sign-in return opens the app), push and account
+   deletion on a real phone.
+6. **Data safety.** App content → Data safety: enter exactly
+   `docs/STORE_LISTING.md` §4, including Approximate location.
+7. **Content rating.** App content → Content rating: the IARC questionnaire,
+   answered as in §6.
+8. **Target audience.** App content → Target audience and content: **18 and
+   over** only.
+9. **Account deletion.** App content → Data deletion: in-app deletion, and
+   the URL `https://tagalong.averrow.com/delete-account`.
+10. **Store listing.** Main store listing from §5 (name, short and full
+    description, category Travel & Local, contact email support@averrow.com,
+    privacy policy URL) plus phone screenshots. App access: paste §7, which
+    explains sign-in.
+11. Promote the internal release to production when the checks pass.
+
 ## Phase 7 (store readiness) in short
 
 Sign in with Apple (§1g), the HTTPS app callback (§1f), and in-app account
@@ -309,6 +450,17 @@ deletion (§1h). Migration `0009_store_readiness` adds `users.apple_sub`,
 `apple_refresh_token_enc` and `deleted_at`; `0010_suspended_identities` keeps
 suspensions across delete and re-sign-up (§1h). Owner steps: §1g items 1-5 and the
 fill-ins under "Mobile sign-in" above.
+
+## Phase 8 (store submission) in short
+
+Native icons and splash screens (`assets:generate`), the iOS privacy manifest
+(`PrivacyInfo.xcprivacy`), iPhone-only builds, public /privacy, /terms,
+/support and /delete-account pages, IP addresses pruned from rate-limit rows
+within 7 hours (the privacy policy promises at most 24), and the store
+answers in `docs/STORE_LISTING.md`. No new migration, binding or secret.
+Owner steps: §1i (both stores), after the §1f fill-ins and §1g. Still open
+before submitting: the controller name and country, and a legal review of
+/privacy and /terms.
 
 ## 2. GitHub repository secrets
 
