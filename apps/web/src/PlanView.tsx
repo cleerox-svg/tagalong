@@ -12,6 +12,7 @@ import {
 import { linkTo, navigate } from "./router.js";
 import { WhoElse } from "./WhoElse.js";
 import { PushOffer, usePushOffer } from "./PushOffer.js";
+import { dateStub } from "./date.js";
 
 const LABELS: Record<PlanPackage["label"], string> = {
 	cheapest: "Cheapest",
@@ -55,20 +56,6 @@ function LiveLine({ live }: { live: NonNullable<Plan["result"]>["live"] }) {
 	].filter(Boolean);
 	return parts.length ? <p className="muted">{parts.join(" ")}</p> : null;
 }
-/**
- * The ticket-stub month and day ("MAR", "14") for a venue-local YYYY-MM-DD.
- * Decorative: the full date is in the text beside it.
- */
-function dateStub(localDate: string | null): { month: string; day: string } | null {
-	const m = localDate ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(localDate) : null;
-	if (!m) return null;
-	const month = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, 1))
-		.toLocaleString(undefined, { month: "short", timeZone: "UTC" })
-		.replace(".", "")
-		.toUpperCase();
-	return { month, day: String(Number(m[3])) };
-}
-
 const when = (iso: string) =>
 	new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
@@ -120,7 +107,7 @@ function Package({
 }) {
 	const diff = was && was.currency === p.currency ? p.total_minor - was.total_minor : null;
 	return (
-		<article className={top ? "card package top" : "card package"}>
+		<article className={top ? "card package is-top" : "card package"}>
 			<header>
 				<span className="label">{LABELS[p.label]}</span>
 				<span className="total">{money(p.total_minor, p.currency)}</span>

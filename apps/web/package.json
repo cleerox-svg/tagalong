@@ -19,6 +19,7 @@
 		"@capacitor/app": "catalog:",
 		"@capacitor/browser": "catalog:",
 		"@capacitor/core": "catalog:",
+		"@fontsource-variable/sora": "catalog:",
 		"@tagalong/shared": "workspace:*",
 		"capacitor-secure-storage-plugin": "catalog:",
 		"react": "catalog:",

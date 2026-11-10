@@ -27,6 +27,7 @@
 	--focus: #c6f432;
 	color-scheme: dark;
 	font-family:
+		"Sora Variable",
 		"Sora",
 		system-ui,
 		-apple-system,
@@ -69,6 +70,7 @@ body {
 /* Reading pages keep a comfortable line length; the planner and results go wide. */
 main > :not(.wide) {
 	max-width: 760px;
+	margin-inline: auto;
 }
 .brand {
 	display: inline-flex;
@@ -527,7 +529,7 @@ legend {
 .package {
 	padding: 16px;
 }
-.package.top {
+.package.is-top {
 	border-color: var(--brand);
 }
 .package header {
@@ -548,7 +550,7 @@ legend {
 	letter-spacing: 0.12em;
 	font-size: 0.6875rem;
 }
-.package.top .label {
+.package.is-top .label {
 	background: var(--brand);
 	border-color: var(--brand);
 	color: var(--brand-ink);
@@ -1200,8 +1202,10 @@ a:hover {
 	text-align: center;
 }
 /* Sign in with Apple, per Apple's HIG: white with black text and logo on a dark background. */
+/* Hover selectors match the generic button:hover rule's specificity so these win. */
 .apple-signin,
-.apple-signin:hover {
+.apple-signin:hover,
+button.apple-signin:hover:not(:disabled):not([aria-disabled="true"]) {
 	background: #ffffff;
 	color: #000000;
 	border-color: #ffffff;
@@ -1209,7 +1213,8 @@ a:hover {
 }
 /* Sign in with Google, Google's dark-theme button: #131314 fill, #8e918f edge, #e3e3e3 text. */
 .google-signin,
-.google-signin:hover {
+.google-signin:hover,
+button.google-signin:hover:not(:disabled):not([aria-disabled="true"]) {
 	background: #131314;
 	color: #e3e3e3;
 	border-color: #8e918f;

@@ -40,3 +40,5 @@ catalog:
   "@capacitor-firebase/messaging": ^8.6.0
   # Keychain (iOS) / Keystore (Android) backed. Not @capacitor/preferences.
   capacitor-secure-storage-plugin: ^0.13.0
+  # Self-hosted Sora (OFL-1.1), so no third-party font request leaves the app.
+  "@fontsource-variable/sora": ^5.3.0
