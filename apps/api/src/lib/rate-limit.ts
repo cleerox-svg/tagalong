@@ -9,13 +9,24 @@ export const MAX_WINDOW_SECONDS = 86_400;
 /**
  * Rows keyed by a client IP use short windows only, so they can be pruned
  * long before the general 24-hour cutoff. The privacy policy promises IP
- * addresses are kept at most 24 hours; with the cron every 6 hours an IP row
- * lives at most IP_MAX_WINDOW_SECONDS + 6 h.
+ * addresses are kept at most 24 hours; with the cron every 6 hours
+ * (wrangler.jsonc) an IP row lives at most IP_MAX_WINDOW_SECONDS + 6 h = 7 h.
  */
 export const IP_MAX_WINDOW_SECONDS = 3_600;
 
 /** Every IP-keyed row starts with this, so pruning can find it. */
 const IP_KEY_PREFIX = "ip:";
+
+/**
+ * Key prefixes IP-keyed rows used before the `ip:` prefix existed (all 60 s
+ * windows). Pruned on the same 1-hour cutoff so rows written before the
+ * deploy are covered too. No user-keyed row starts with any of these
+ * (`share:` for share-link creation is a different prefix from `shared:`).
+ * Safe to remove once no such rows remain.
+ */
+const LEGACY_IP_KEY_PREFIXES = ["shared:", "native-exchange:", "signin:"] as const;
+
+const IP_KEY_PREFIXES = [IP_KEY_PREFIX, ...LEGACY_IP_KEY_PREFIXES];
 
 /** Rows deleted per statement, so one prune never runs one huge DELETE. */
 const PRUNE_BATCH = 5_000;
@@ -67,26 +78,28 @@ export async function rateLimitByIp(
 /**
  * Deletes rate-limit rows whose window has ended:
  *  - any row with window_start more than 24 h ago (no window is longer), and
- *  - any IP-keyed row with window_start more than 1 h ago (no IP window is longer).
+ *  - any IP-keyed row (`ip:` or a legacy IP prefix) with window_start more
+ *    than 1 h ago (no IP window is longer).
  * A live window is never deleted. `window_start` is in Unix seconds.
  * Batched by rowid so each statement is bounded. Returns rows deleted.
  */
 export async function pruneRateLimits(db: D1Database, nowMs: number): Promise<number> {
 	const nowSec = Math.floor(nowMs / 1000);
+	// One "substr(key, 1, ?) = ?" per prefix; the SQL text is fixed, values are bound.
+	const prefixMatch = IP_KEY_PREFIXES.map(() => "substr(key, 1, ?) = ?").join(" OR ");
 	const stmt = db
 		.prepare(
 			`DELETE FROM rate_limits WHERE rowid IN (
 			   SELECT rowid FROM rate_limits
 			   WHERE window_start < ?
-			      OR (window_start < ? AND substr(key, 1, ?) = ?)
+			      OR (window_start < ? AND (${prefixMatch}))
 			   LIMIT ?
 			 )`,
 		)
 		.bind(
 			nowSec - MAX_WINDOW_SECONDS,
 			nowSec - IP_MAX_WINDOW_SECONDS,
-			IP_KEY_PREFIX.length,
-			IP_KEY_PREFIX,
+			...IP_KEY_PREFIXES.flatMap((p) => [p.length, p]),
 			PRUNE_BATCH,
 		);
 	let deleted = 0;
