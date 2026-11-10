@@ -381,6 +381,13 @@ legend {
 .describe-row > button {
 	align-self: flex-start;
 }
+.ai-note {
+	margin: 12px 0 0;
+}
+.ai-note a {
+	display: inline-block;
+	padding: 4px 0;
+}
 .trip-form > fieldset + fieldset {
 	padding-top: 16px;
 	border-top: 1px solid var(--line-soft);

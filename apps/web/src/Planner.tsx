@@ -11,6 +11,7 @@ import {
 	toTripRequest,
 	unpinEvent,
 } from "./form.js";
+import { PageLink } from "./Legal.js";
 import { COMMON_CURRENCIES } from "./Onboarding.js";
 import { navigate } from "./router.js";
 
@@ -174,15 +175,27 @@ export function Planner({ me }: { me: Me }) {
 						<textarea
 							rows={3}
 							maxLength={2000}
+							aria-describedby="ai-note"
 							placeholder="e.g. I'm in Toronto, I want to see the Knicks at MSG in March, $1,200 CAD for two of us, we'd rather drive, we like food and nightlife."
 							value={text}
 							onChange={(e) => setText(e.target.value)}
 						/>
 					</label>
-					<button type="button" onClick={parse} disabled={parsing || text.trim().length < 3}>
+					<button
+						type="button"
+						onClick={parse}
+						disabled={parsing || text.trim().length < 3}
+						aria-describedby="ai-note"
+					>
 						{parsing ? "Reading…" : "Fill in the form for me"}
 					</button>
 				</div>
+				{/* App Store 5.1.2: say who gets the text before it is sent. Only api.parse sends it. */}
+				<p className="note ai-note" id="ai-note">
+					To fill in the form, what you type here is sent to Anthropic's Claude AI, with today's
+					date. It only reads your words into the form below; it never finds, sets or ranks prices.
+					Don't include anything private. <PageLink to="/privacy">Privacy Policy</PageLink>
+				</p>
 				{parseNote && <p className="note">{parseNote}</p>}
 			</section>
 
