@@ -54,7 +54,8 @@ export async function roomAudience(
 				      OR (b.blocker_id = m.user_id AND b.blocked_id = ?)) AS blocked
 				 FROM group_members m JOIN users u ON u.id = m.user_id
 				 WHERE m.group_id = ? AND u.tagalong_opt_in_at IS NOT NULL
-				   AND u.tagalong_suspended_at IS NULL AND u.birthdate_verified_18 = 1`,
+				   AND u.tagalong_suspended_at IS NULL AND u.birthdate_verified_18 = 1
+				   AND u.deleted_at IS NULL`,
 			)
 			.bind(authorId, authorId, roomId)
 			.all<{ id: string; blocked: number }>();

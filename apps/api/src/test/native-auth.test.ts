@@ -6,6 +6,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { issueNativeCode } from "../auth/native.js";
 import { b64url, issueBearer, signToken } from "../auth/session.js";
+import { expectNativeError } from "./apple-fixtures.js";
 import {
 	call,
 	groupWith,
@@ -19,7 +20,7 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
-const APP = "com.averrow.budgetrip://auth/callback";
+const APP = "https://tagalong.averrow.com/auth/app-callback";
 
 const idToken = (claims: Record<string, unknown>) => {
 	const b64 = (o: unknown) =>
@@ -79,7 +80,9 @@ async function appLink(res: Response): Promise<string> {
 	expect(hrefs).toHaveLength(1);
 	expect(html).not.toMatch(/<script/i);
 	const link = hrefs[0] ?? "";
-	expect(link).toMatch(/^com\.averrow\.budgetrip:\/\/auth\/callback\?code=[A-Za-z0-9_-]{43}$/);
+	expect(link).toMatch(
+		/^https:\/\/tagalong\.averrow\.com\/auth\/app-callback\?code=[A-Za-z0-9_-]{43}$/,
+	);
 	return link;
 }
 
@@ -119,10 +122,9 @@ describe("native sign-in", () => {
 		expect((await exchange(code, verifier)).status).toBe(400);
 	});
 
-	it("rejects a bad challenge at start with an app error redirect", async () => {
+	it("rejects a bad challenge at start with the app error page", async () => {
 		const res = await call("/auth/google/start?native=1&code_challenge=short");
-		expect(res.status).toBe(302);
-		expect(res.headers.get("Location")).toBe(`${APP}?error=bad_request`);
+		await expectNativeError(res, "bad_request");
 	});
 });
 
@@ -321,19 +323,17 @@ describe("native start: no client-chosen redirect", () => {
 		const state = new URL(start.headers.get("Location") ?? "").searchParams.get("state");
 		const cookie = (start.headers.get("Set-Cookie") ?? "").split(";")[0] ?? "";
 		const cancelled = await call(`/auth/google/callback?state=${state}`, { cookie });
-		expect(cancelled.headers.get("Location")).toBe(`${APP}?error=cancelled`);
+		await expectNativeError(cancelled, "cancelled");
 		const bad = await call(`/auth/google/callback?state=nope&code=abc`, { cookie });
-		expect(bad.headers.get("Location")).toBe(`${APP}?error=bad_state`);
+		await expectNativeError(bad, "bad_state");
 		// Lost/expired tg_oauth cookie on a native state: still the app URL, not JSON.
 		const lost = await call(`/auth/google/callback?state=${state}&code=abc`);
-		expect(lost.status).toBe(302);
-		expect(lost.headers.get("Location")).toBe(`${APP}?error=bad_state`);
+		await expectNativeError(lost, "bad_state");
 	});
 
 	it("a bad challenge with a return_to still errors to the app URL", async () => {
 		const res = await call(`/auth/google/start?native=1&code_challenge=short${extra}`);
-		expect(res.status).toBe(302);
-		expect(res.headers.get("Location")).toBe(`${APP}?error=bad_request`);
+		await expectNativeError(res, "bad_request");
 	});
 });
 

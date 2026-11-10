@@ -2,10 +2,12 @@
  * Price-drop alerts (spec §9 phase 3). Run by the Cron Trigger: re-checks a
  * few saved trips per run with fresh provider calls, and when the cheapest
  * package has dropped enough below the best price seen, records an alert and
- * emails it through Resend.
+ * emails it through Resend. Each trip is checked on its own: one failing
+ * doesn't stop the rest, and trips whose owner deleted their account are
+ * skipped.
  */
 import { formatMoney } from "@tagalong/shared";
-import { newId, nowIso } from "../lib/http.js";
+import { LIVE_USER, newId, nowIso } from "../lib/http.js";
 import { WEB_ORIGIN } from "../lib/share.js";
 import { sendEmail } from "../providers/resend.js";
 import { dispatchPush } from "../push/dispatch.js";
@@ -57,7 +59,7 @@ export async function checkSavedTrips(
 			 JOIN trip_requests t ON t.id = s.trip_request_id
 			 JOIN plans p ON p.id = s.latest_plan_id
 			 LEFT JOIN events e ON e.id = p.event_id
-			 WHERE s.alerts_enabled = 1
+			 WHERE s.alerts_enabled = 1 AND u.deleted_at IS NULL
 			   AND (s.last_checked_at IS NULL OR s.last_checked_at < ?)
 			   AND COALESCE(e.local_date, t.date_to) >= ?
 			 ORDER BY s.last_checked_at IS NOT NULL, s.last_checked_at
@@ -68,92 +70,114 @@ export async function checkSavedTrips(
 
 	let alerts = 0;
 	for (const trip of due) {
-		// Mark first: a run that fails part-way must not re-check the same trip every cron tick.
-		await db
-			.prepare(
-				"UPDATE saved_trips SET last_checked_at = ? WHERE user_id = ? AND trip_request_id = ?",
-			)
-			.bind(nowIso(), trip.user_id, trip.trip_request_id)
-			.run();
-
-		const planId = newId();
-		await db
-			.prepare(
-				`INSERT INTO plans (id, user_id, trip_request_id, status, progress, rechecked_from)
-				 VALUES (?, ?, ?, 'queued', 'Scheduled price check…', ?)`,
-			)
-			.bind(planId, trip.user_id, trip.trip_request_id, trip.latest_plan_id)
-			.run();
-		await runPlan(env, planId, { fresh: true });
-
-		const status = await db
-			.prepare("SELECT status FROM plans WHERE id = ?")
-			.bind(planId)
-			.first<{ status: string }>();
-		if (status?.status !== "done") continue;
-		const latest = await cheapestTotal(db, planId);
-
-		await db
-			.prepare(
-				`UPDATE saved_trips SET latest_plan_id = ?,
-				   best_total_minor = CASE WHEN best_total_minor IS NULL THEN ?
-				     WHEN ? IS NULL THEN best_total_minor ELSE MIN(best_total_minor, ?) END
-				 WHERE user_id = ? AND trip_request_id = ?`,
-			)
-			.bind(planId, latest, latest, latest, trip.user_id, trip.trip_request_id)
-			.run();
-
-		if (
-			!isAlertWorthy(trip.best_total_minor, latest) ||
-			latest === null ||
-			trip.best_total_minor === null
-		)
-			continue;
-
-		const alertId = newId();
-		await db
-			.prepare(
-				`INSERT INTO price_alerts (id, user_id, trip_request_id, plan_id, old_total_minor, new_total_minor, currency)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.bind(
-				alertId,
-				trip.user_id,
-				trip.trip_request_id,
-				planId,
-				trip.best_total_minor,
-				latest,
-				trip.currency,
-			)
-			.run();
-		alerts++;
-		await dispatchPush(env, { kind: "price_drop", alertId }); // never throws; no-op without FCM
-
-		if (!env.RESEND_API_KEY) continue; // recorded and shown in the app; no email until the key is set
-		const name = trip.event_name ?? trip.event_query;
-		const was = formatMoney({ amount_minor: trip.best_total_minor, currency: trip.currency });
-		const nowPrice = formatMoney({ amount_minor: latest, currency: trip.currency });
-		const link = `${WEB_ORIGIN}/plans/${planId}`;
-		const tripsLink = `${WEB_ORIGIN}/trips`;
+		// One trip's failure (a provider error, or a foreign-key error because
+		// its owner deleted their account mid-run) must not stop the others.
 		try {
-			await sendEmail(env.RESEND_API_KEY, {
-				from: env.ALERT_FROM_EMAIL,
-				to: trip.email,
-				subject: `Price drop: ${name} now from ${nowPrice}`,
-				text: `Good news: your saved trip to ${name} now starts at ${nowPrice}, down from ${was}.\n\nSee the packages: ${link}\n\nPrices change; check them when you book. Turn these emails off under My trips: ${tripsLink}`,
-				html: `<p>Good news: your saved trip to <strong>${escapeHtml(name)}</strong> now starts at <strong>${escapeHtml(nowPrice)}</strong>, down from ${escapeHtml(was)}.</p><p><a href="${link}">See the packages</a></p><p style="color:#64748b;font-size:13px">Prices change; check them when you book. Turn these emails off under <a href="${tripsLink}">My trips</a>.</p>`,
-			});
-			await db
-				.prepare("UPDATE price_alerts SET emailed_at = ? WHERE id = ?")
-				.bind(nowIso(), alertId)
-				.run();
+			if (await checkOneTrip(env, trip)) alerts++;
 		} catch (err) {
-			console.warn("price alert email failed", alertId, err);
-			await db
-				.prepare("UPDATE price_alerts SET email_error = ? WHERE id = ?")
-				.bind(err instanceof Error ? err.message.slice(0, 200) : "send failed", alertId)
-				.run();
+			// No user id, email or trip details in the log: just what failed.
+			console.warn(
+				"price check failed for a saved trip",
+				err instanceof Error ? `${err.name}: ${err.message.slice(0, 200)}` : "unknown error",
+			);
 		}
 	}
 	return { checked: due.length, alerts };
+}
+
+/**
+ * Re-checks one saved trip; true when it recorded a price-drop alert. Every
+ * write is guarded in SQL by the owner still existing (LIVE_USER), so an
+ * account deleted mid-run gets no new plan or alert.
+ */
+async function checkOneTrip(env: Env, trip: DueTrip): Promise<boolean> {
+	const db = env.DB;
+	// Mark first: a run that fails part-way must not re-check the same trip every cron tick.
+	await db
+		.prepare("UPDATE saved_trips SET last_checked_at = ? WHERE user_id = ? AND trip_request_id = ?")
+		.bind(nowIso(), trip.user_id, trip.trip_request_id)
+		.run();
+
+	const planId = newId();
+	const queued = await db
+		.prepare(
+			`INSERT INTO plans (id, user_id, trip_request_id, status, progress, rechecked_from)
+			 SELECT ?, ?, ?, 'queued', 'Scheduled price check…', ? WHERE ${LIVE_USER}`,
+		)
+		.bind(planId, trip.user_id, trip.trip_request_id, trip.latest_plan_id, trip.user_id)
+		.run();
+	if (!queued.meta.changes) return false; // the owner deleted their account
+	await runPlan(env, planId, { fresh: true });
+
+	const status = await db
+		.prepare("SELECT status FROM plans WHERE id = ?")
+		.bind(planId)
+		.first<{ status: string }>();
+	if (status?.status !== "done") return false;
+	const latest = await cheapestTotal(db, planId);
+
+	await db
+		.prepare(
+			`UPDATE saved_trips SET latest_plan_id = ?,
+			   best_total_minor = CASE WHEN best_total_minor IS NULL THEN ?
+			     WHEN ? IS NULL THEN best_total_minor ELSE MIN(best_total_minor, ?) END
+			 WHERE user_id = ? AND trip_request_id = ?`,
+		)
+		.bind(planId, latest, latest, latest, trip.user_id, trip.trip_request_id)
+		.run();
+
+	if (
+		!isAlertWorthy(trip.best_total_minor, latest) ||
+		latest === null ||
+		trip.best_total_minor === null
+	)
+		return false;
+
+	const alertId = newId();
+	const recorded = await db
+		.prepare(
+			`INSERT INTO price_alerts (id, user_id, trip_request_id, plan_id, old_total_minor, new_total_minor, currency)
+			 SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${LIVE_USER}`,
+		)
+		.bind(
+			alertId,
+			trip.user_id,
+			trip.trip_request_id,
+			planId,
+			trip.best_total_minor,
+			latest,
+			trip.currency,
+			trip.user_id,
+		)
+		.run();
+	if (!recorded.meta.changes) return false; // the owner deleted their account
+	await dispatchPush(env, { kind: "price_drop", alertId }); // never throws; no-op without FCM
+
+	if (!env.RESEND_API_KEY) return true; // recorded and shown in the app; no email until the key is set
+	if (!trip.email) return true; // an Apple account that shared no email address
+	const name = trip.event_name ?? trip.event_query;
+	const was = formatMoney({ amount_minor: trip.best_total_minor, currency: trip.currency });
+	const nowPrice = formatMoney({ amount_minor: latest, currency: trip.currency });
+	const link = `${WEB_ORIGIN}/plans/${planId}`;
+	const tripsLink = `${WEB_ORIGIN}/trips`;
+	try {
+		await sendEmail(env.RESEND_API_KEY, {
+			from: env.ALERT_FROM_EMAIL,
+			to: trip.email,
+			subject: `Price drop: ${name} now from ${nowPrice}`,
+			text: `Good news: your saved trip to ${name} now starts at ${nowPrice}, down from ${was}.\n\nSee the packages: ${link}\n\nPrices change; check them when you book. Turn these emails off under My trips: ${tripsLink}`,
+			html: `<p>Good news: your saved trip to <strong>${escapeHtml(name)}</strong> now starts at <strong>${escapeHtml(nowPrice)}</strong>, down from ${escapeHtml(was)}.</p><p><a href="${link}">See the packages</a></p><p style="color:#64748b;font-size:13px">Prices change; check them when you book. Turn these emails off under <a href="${tripsLink}">My trips</a>.</p>`,
+		});
+		await db
+			.prepare("UPDATE price_alerts SET emailed_at = ? WHERE id = ?")
+			.bind(nowIso(), alertId)
+			.run();
+	} catch (err) {
+		console.warn("price alert email failed", alertId, err);
+		await db
+			.prepare("UPDATE price_alerts SET email_error = ? WHERE id = ?")
+			.bind(err instanceof Error ? err.message.slice(0, 200) : "send failed", alertId)
+			.run();
+	}
+	return true;
 }

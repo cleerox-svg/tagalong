@@ -32,6 +32,14 @@
 		// secret. Empty means nobody can open the moderation queue (fails
 		// closed). See docs/SETUP.md.
 		"MODERATOR_USER_IDS": "",
+		// Sign in with Apple (phase 7). Not secrets: the Services ID (the web
+		// client_id, e.g. com.averrow.budgetrip.signin), the 10-character Team
+		// ID and the Key ID of the .p8 key. The key itself is the secret
+		// APPLE_PRIVATE_KEY. Any of the four empty means Apple sign-in answers
+		// "misconfigured" (fails closed). See docs/SETUP.md.
+		"APPLE_SERVICES_ID": "",
+		"APPLE_TEAM_ID": "",
+		"APPLE_KEY_ID": "",
 	},
 
 	// Scheduled price checks for saved trips (phase 3). Every 6 hours at :23.

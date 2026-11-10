@@ -1,0 +1,11 @@
+# Workers static assets headers (copied to dist/ by Vite).
+# The AASA file has no extension, so its type must be set explicitly; iOS
+# requires application/json. assetlinks.json is typed by its extension, and is
+# listed too so neither file is ever cached stale for long after a cert change.
+/.well-known/apple-app-site-association
+  Content-Type: application/json
+  Cache-Control: public, max-age=3600
+
+/.well-known/assetlinks.json
+  Content-Type: application/json
+  Cache-Control: public, max-age=3600

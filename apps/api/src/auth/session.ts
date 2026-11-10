@@ -148,9 +148,16 @@ export async function sessionUserId<E extends AppEnv>(c: Context<E>): Promise<st
 	return raw ? parseUserExp(raw) : null;
 }
 
-/** 401 unless the account still exists. */
+/**
+ * 401 unless the account still exists and has not been deleted (phase 7). A
+ * deleted account is a tombstone row, so every credential (cookie, bearer,
+ * chat ticket, native code) that names it stops working here.
+ */
 export async function assertUserExists(db: D1Database, userId: string): Promise<void> {
-	const row = await db.prepare("SELECT id FROM users WHERE id = ?").bind(userId).first();
+	const row = await db
+		.prepare("SELECT id FROM users WHERE id = ? AND deleted_at IS NULL")
+		.bind(userId)
+		.first();
 	if (!row) throw new HttpError(401, "signed_out", "Sign in first.");
 }
 
@@ -169,7 +176,9 @@ export const requireUser = createMiddleware<AppEnv>(async (c, next) => {
 
 /** Spec §6: 18+ only, confirmed at sign-up. Planning requires it too. */
 export const requireAdult = createMiddleware<AppEnv>(async (c, next) => {
-	const row = await c.env.DB.prepare("SELECT birthdate_verified_18 AS ok FROM users WHERE id = ?")
+	const row = await c.env.DB.prepare(
+		"SELECT birthdate_verified_18 AS ok FROM users WHERE id = ? AND deleted_at IS NULL",
+	)
 		.bind(c.get("userId"))
 		.first<{ ok: number }>();
 	if (row?.ok !== 1)

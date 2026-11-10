@@ -63,6 +63,7 @@ const {
 	getNativeToken,
 	handleAuthUrl,
 	isNative,
+	nativeAfterAccountDeleted,
 	nativeSignIn,
 	nativeSignOut,
 	parseAuthCallback,
@@ -149,13 +150,37 @@ describe("parseAuthCallback", () => {
 		});
 	});
 
+	it("is exactly the HTTPS app-callback link on our domain", () => {
+		expect(AUTH_CALLBACK).toBe("https://tagalong.averrow.com/auth/app-callback");
+		expect(parseAuthCallback(`${AUTH_CALLBACK}?code=${CODE}#frag`)).toEqual({
+			kind: "code",
+			code: CODE,
+		});
+	});
+
 	it("ignores URLs that aren't the sign-in callback", () => {
 		for (const url of [
+			// The old custom scheme is gone: any app could claim it.
+			`com.averrow.budgetrip://auth/callback?code=${CODE}`,
 			"com.averrow.budgetrip://chat/dm/1",
-			`com.averrow.budgetrip://auth/callbackx?code=${CODE}`,
-			`com.averrow.budgetrip://auth/callback/extra?code=${CODE}`,
-			`https://evil.example/com.averrow.budgetrip://auth/callback?code=${CODE}`,
-			`other.app://auth/callback?code=${CODE}`,
+			// Other hosts, schemes and ports.
+			`http://tagalong.averrow.com/auth/app-callback?code=${CODE}`,
+			`https://evil.example/auth/app-callback?code=${CODE}`,
+			`https://tagalong.averrow.com.evil.example/auth/app-callback?code=${CODE}`,
+			`https://evil.tagalong.averrow.com/auth/app-callback?code=${CODE}`,
+			`https://tagalong.averrow.com:8443/auth/app-callback?code=${CODE}`,
+			`https://user@tagalong.averrow.com/auth/app-callback?code=${CODE}`,
+			`https://TAGALONG.averrow.com/auth/app-callback?code=${CODE}`,
+			`https://evil.example/https://tagalong.averrow.com/auth/app-callback?code=${CODE}`,
+			// Other paths, extra segments, trailing slash, look-alikes.
+			`https://tagalong.averrow.com/auth/app-callbackx?code=${CODE}`,
+			`https://tagalong.averrow.com/auth/app-callback/?code=${CODE}`,
+			`https://tagalong.averrow.com/auth/app-callback/extra?code=${CODE}`,
+			`https://tagalong.averrow.com/auth/app-callback/../app-callback?code=${CODE}`,
+			`https://tagalong.averrow.com/auth/callback?code=${CODE}`,
+			`https://tagalong.averrow.com/x/auth/app-callback?code=${CODE}`,
+			"https://tagalong.averrow.com/s/abc",
+			`other.app://auth/app-callback?code=${CODE}`,
 			"",
 		])
 			expect(parseAuthCallback(url), url).toBeNull();
@@ -263,7 +288,7 @@ describe("nativeSignIn", () => {
 		);
 		vi.stubGlobal("fetch", fetchMock);
 
-		const done = nativeSignIn();
+		const done = nativeSignIn("google");
 		await vi.waitFor(() => expect(browserOpen).toHaveBeenCalled());
 		const opened = new URL(browserOpen.mock.calls[0]?.[0].url ?? "");
 		expect(opened.pathname).toBe("/auth/google/start");
@@ -303,16 +328,88 @@ describe("nativeSignIn", () => {
 			vi.fn(async () => new Response("{}", { status: 400 })),
 		);
 
-		const a = nativeSignIn();
+		const a = nativeSignIn("google");
 		await vi.waitFor(() => expect(listeners.has("app:appUrlOpen")).toBe(true));
 		listeners.get("app:appUrlOpen")?.({ url: `${AUTH_CALLBACK}?error=cancelled` });
 		await expect(a).rejects.toThrow("Sign-in was cancelled.");
 
-		const b = nativeSignIn();
+		const b = nativeSignIn("google");
 		await vi.waitFor(() => expect(listeners.has("app:appUrlOpen")).toBe(true));
 		listeners.get("app:appUrlOpen")?.({ url: `${AUTH_CALLBACK}?code=${CODE}` });
 		await expect(b).rejects.toThrow("We couldn't sign you in. Try again.");
 		expect(await getNativeToken()).toBeNull();
+	});
+});
+
+describe("nativeSignIn with Apple", () => {
+	it("opens the Apple start URL with an S256 challenge and exchanges the same way", async () => {
+		setNative("ios");
+		const fetchMock = vi.fn(
+			async (_url: string, _init: RequestInit) =>
+				new Response(JSON.stringify({ token: "sess-a", expires_at: "2999-01-01T00:00:00Z" }), {
+					status: 200,
+				}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const done = nativeSignIn("apple");
+		await vi.waitFor(() => expect(browserOpen).toHaveBeenCalled());
+		const opened = new URL(browserOpen.mock.calls[0]?.[0].url ?? "");
+		expect(opened.pathname).toBe("/auth/apple/start");
+		expect(opened.searchParams.get("native")).toBe("1");
+		const challenge = opened.searchParams.get("code_challenge") ?? "";
+		expect(challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+		// The old custom-scheme callback is not ours any more: ignored.
+		listeners.get("app:appUrlOpen")?.({
+			url: `com.averrow.budgetrip://auth/callback?code=${CODE}`,
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
+
+		listeners.get("app:appUrlOpen")?.({ url: `${AUTH_CALLBACK}?code=${CODE}` });
+		await done;
+		const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+			code: string;
+			code_verifier: string;
+		};
+		expect(body.code).toBe(CODE);
+		expect(await pkceChallenge(body.code_verifier)).toBe(challenge);
+		expect(await getNativeToken()).toBe("sess-a");
+	});
+});
+
+describe("nativeAfterAccountDeleted", () => {
+	it("forgets the session and push tokens without calling the API", async () => {
+		setNative("android");
+		store.set(
+			"budgetrip.session",
+			JSON.stringify({ token: "sess", expires_at: "2999-01-01T00:00:00Z" }),
+		);
+		store.set("budgetrip.push-token", "fcm-1");
+		expect(await getNativeToken()).toBe("sess"); // now cached in memory too
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await nativeAfterAccountDeleted();
+
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(store.has("budgetrip.session")).toBe(false);
+		expect(store.has("budgetrip.push-token")).toBe(false);
+		expect(await getNativeToken()).toBeNull();
+		// A later sign-out has no push token left to unregister.
+		await nativeSignOut().catch(() => undefined);
+		expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/push/devices/unregister"))).toBe(
+			false,
+		);
+	});
+
+	it("cancels a sign-in in progress", async () => {
+		setNative("ios");
+		vi.stubGlobal("fetch", vi.fn());
+		const pendingSignIn = nativeSignIn("google");
+		await vi.waitFor(() => expect(browserOpen).toHaveBeenCalled());
+		await nativeAfterAccountDeleted();
+		await expect(pendingSignIn).rejects.toThrow("Sign-in was cancelled.");
 	});
 });
 

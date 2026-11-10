@@ -119,6 +119,13 @@ export const requireModerator = createMiddleware<TgEnv>(async (c, next) => {
 // Visibility
 // ---------------------------------------------------------------------------
 
+/**
+ * SQL: the name other people see for the user aliased `alias`. A deleted
+ * account (phase 7) is always "Deleted user"; its old name is gone anyway.
+ */
+export const SHOWN_NAME = (alias: string) =>
+	`CASE WHEN ${alias}.deleted_at IS NOT NULL THEN 'Deleted user' ELSE ${alias}.tagalong_name END`;
+
 /** SQL fragment: true when `?` (me) and the given column's user block each other either way. */
 export const NOT_BLOCKED = (col: string) =>
 	`NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = ? AND b.blocked_id = ${col})
@@ -238,7 +245,8 @@ export async function isActiveTagalongUser(db: D1Database, userId: string) {
 	const row = await db
 		.prepare(
 			`SELECT 1 AS x FROM users WHERE id = ? AND tagalong_opt_in_at IS NOT NULL
-			 AND tagalong_suspended_at IS NULL AND birthdate_verified_18 = 1`,
+			 AND tagalong_suspended_at IS NULL AND birthdate_verified_18 = 1
+			 AND deleted_at IS NULL`,
 		)
 		.bind(userId)
 		.first();

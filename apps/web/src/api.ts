@@ -1,5 +1,7 @@
 import type {
+	AuthProvider,
 	BlockedUser,
+	DeleteAccountRequest,
 	ChatMessage,
 	Connection,
 	EventCategoryId,
@@ -72,6 +74,8 @@ export interface Me {
 	/** Phase 5. Only the chosen name and city label are ever shown to others. */
 	tagalong: TagalongStatus;
 	is_moderator: boolean;
+	/** Phase 7: how this account signs in. Older APIs omit it. */
+	sign_in_providers?: AuthProvider[];
 }
 
 export interface PlanItem {
@@ -263,6 +267,16 @@ export const api = {
 		}),
 	signInUrl: () =>
 		`${API_BASE}/auth/google/start?return_to=${encodeURIComponent(window.location.href)}`,
+	appleSignInUrl: (returnTo: string = window.location.href) =>
+		`${API_BASE}/auth/apple/start?return_to=${encodeURIComponent(returnTo)}`,
+	/**
+	 * Phase 7: delete the account and everything tied to it. The server clears
+	 * the session; every request after this is a 401.
+	 */
+	deleteAccount: () => {
+		const body: DeleteAccountRequest = { confirm: "DELETE" };
+		return request<{ ok: true }>("/me/delete", { method: "POST", body: JSON.stringify(body) });
+	},
 };
 
 /** An event from a pasted link or a browse, ready to pin into the form. */

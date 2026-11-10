@@ -7,6 +7,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { b64url } from "../auth/session.js";
+import { expectNativeError } from "./apple-fixtures.js";
 import { dispatchPush, MAX_RECIPIENTS, MAX_SENDS } from "../push/dispatch.js";
 import {
 	call,
@@ -19,7 +20,7 @@ import {
 } from "./helpers.js";
 
 const mutableEnv = env as unknown as Record<string, string | undefined>;
-const APP = "com.averrow.budgetrip://auth/callback";
+const APP = "https://tagalong.averrow.com/auth/app-callback";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -230,12 +231,11 @@ async function startNative(verifier: string) {
 }
 
 describe("native callback with a lost tg_oauth cookie", () => {
-	it("still redirects to the fixed app URL with error=bad_state", async () => {
+	it("still ends on the fixed app URL with error=bad_state (error page)", async () => {
 		const { state } = await startNative(b64url(crypto.getRandomValues(new Uint8Array(48))));
 		expect(state.startsWith("n.")).toBe(true);
 		const res = await call(`/auth/google/callback?state=${encodeURIComponent(state)}&code=abc`);
-		expect(res.status).toBe(302);
-		expect(res.headers.get("Location")).toBe(`${APP}?error=bad_state`);
+		await expectNativeError(res, "bad_state");
 	});
 
 	it("a web flow without the cookie is still the 400", async () => {

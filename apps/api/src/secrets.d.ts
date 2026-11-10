@@ -31,6 +31,12 @@ interface WorkerSecrets {
 	 * Without it no push is sent; a malformed value is treated as unset.
 	 */
 	FCM_SERVICE_ACCOUNT_JSON?: string;
+	/**
+	 * Phase 7 Sign in with Apple. Optional: the .p8 private key (PKCS8 PEM)
+	 * whose Key ID is APPLE_KEY_ID. Without it (or any APPLE_* var) Apple
+	 * sign-in answers "misconfigured".
+	 */
+	APPLE_PRIVATE_KEY?: string;
 }
 
 declare namespace Cloudflare {

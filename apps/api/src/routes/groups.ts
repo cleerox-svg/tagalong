@@ -12,7 +12,15 @@ import {
 	type GroupSummary,
 } from "@tagalong/shared";
 import { deferOf, kick } from "../chat/notify.js";
-import { HttpError, invalidInput, newId, nowIso, readJson } from "../lib/http.js";
+import {
+	HttpError,
+	invalidInput,
+	LIVE_USER,
+	newId,
+	nowIso,
+	readJson,
+	signedOut,
+} from "../lib/http.js";
 import {
 	adult,
 	canSeeEvent,
@@ -76,13 +84,16 @@ groups.post("/events/:eventId/group/join", ...member, async (c) => {
 	// Interest on (re)join, one statement: omitted keeps what a member already
 	// had (NULL for a new member), null clears it, a string replaces it.
 	const interest = body.data.interest;
-	await c.env.DB.prepare(
-		`INSERT INTO group_members (group_id, user_id, interest, joined_at) VALUES (?, ?, ?, ?)
+	// Guarded in SQL: an account deleted mid-request never joins.
+	const joined = await c.env.DB.prepare(
+		`INSERT INTO group_members (group_id, user_id, interest, joined_at)
+		 SELECT ?, ?, ?, ? WHERE ${LIVE_USER}
 		 ON CONFLICT (group_id, user_id) DO UPDATE SET
 		   interest = CASE WHEN ? = 1 THEN excluded.interest ELSE group_members.interest END`,
 	)
-		.bind(group.id, u.id, interest ?? null, nowIso(), interest === undefined ? 0 : 1)
+		.bind(group.id, u.id, interest ?? null, nowIso(), u.id, interest === undefined ? 0 : 1)
 		.run();
+	if (!joined.meta.changes) throw signedOut();
 	return c.json(await summary(c.env.DB, eventId, u.id));
 });
 
@@ -131,6 +142,7 @@ groups.get("/groups/:id", ...member, async (c) => {
 			 FROM group_members m JOIN users u ON u.id = m.user_id
 			 WHERE m.group_id = ? AND u.tagalong_opt_in_at IS NOT NULL
 			   AND u.tagalong_suspended_at IS NULL AND u.tagalong_name IS NOT NULL
+			   AND u.deleted_at IS NULL
 			   AND ${NOT_BLOCKED("m.user_id")}
 			 ORDER BY m.joined_at, m.user_id LIMIT ?`,
 		)

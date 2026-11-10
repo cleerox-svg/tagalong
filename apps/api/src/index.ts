@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { auth } from "./auth/routes.js";
+import { account } from "./routes/account.js";
 import { errorBody, HttpError, sendError, type AppEnv } from "./lib/http.js";
 import { corsMiddleware } from "./lib/security.js";
 import { health } from "./routes/health.js";
@@ -22,6 +23,8 @@ app.use("*", corsMiddleware);
 app.route("/", health);
 // Sign-in, session, profile.
 app.route("/", auth);
+// Signed in: delete my account (phase 7).
+app.route("/", account);
 // Signed in: Budgetrip.
 app.route("/", plans);
 // Signed in: pasted event links and category browse.

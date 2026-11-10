@@ -1,9 +1,11 @@
 /**
  * Phase 6: native (Capacitor) sign-in. Google blocks OAuth in embedded
  * webviews and the app's webview is cross-site to the API, so the app opens
- * /auth/google/start?native=1&code_challenge=... in the system browser. The
- * callback hands a one-time code back to the app on a FIXED custom-scheme URL,
- * and the app swaps code + PKCE verifier for a bearer token here.
+ * /auth/google/start?native=1&code_challenge=... (or /auth/apple/start) in the
+ * system browser. The callback hands a one-time code back to the app on a
+ * FIXED verified HTTPS link (an Android App Link / iOS Universal Link on the
+ * web origin, phase 7), and the app swaps code + PKCE verifier for a bearer
+ * token here.
  *
  * Only SHA-256(code) is stored (base64url), the code lives 60 s and is
  * single-use (one atomic UPDATE ... RETURNING); a failed PKCE check still
@@ -16,8 +18,14 @@ import { rateLimit } from "../lib/rate-limit.js";
 import { assertJsonBody } from "../lib/security.js";
 import { assertUserExists, b64url, issueBearer } from "./session.js";
 
-/** The ONLY place a native sign-in redirects to. Never a client-supplied URL. */
-export const NATIVE_CALLBACK = "com.averrow.budgetrip://auth/callback";
+/**
+ * The ONLY place a native sign-in redirects to. Never a client-supplied URL.
+ * A verified HTTPS link (phase 7): the OS hands it only to the app whose
+ * signature the domain vouches for (/.well-known/assetlinks.json,
+ * /.well-known/apple-app-site-association on tagalong.averrow.com), unlike a
+ * custom scheme, which any installed app can claim.
+ */
+export const NATIVE_CALLBACK = "https://tagalong.averrow.com/auth/app-callback";
 
 /** RFC 7636 S256 challenge: base64url SHA-256, unpadded, always 43 chars. */
 export const CODE_CHALLENGE_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -48,7 +56,7 @@ export async function issueNativeCode(
 	return code;
 }
 
-function timingSafeEqualStr(a: string, b: string): boolean {
+export function timingSafeEqualStr(a: string, b: string): boolean {
 	const x = new TextEncoder().encode(a);
 	const y = new TextEncoder().encode(b);
 	// Lengths are public (a challenge is always 43 chars); compare contents in constant time.

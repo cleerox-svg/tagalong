@@ -147,6 +147,11 @@ const INVISIBLE = String.raw`\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066
 /** C0 / C1 controls plus the invisible set: never allowed in a name or interest. */
 const CONTROL_RE = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f${INVISIBLE}]`);
 
+/** True when `text` holds a C0/C1 control or an invisible formatting character. */
+export function hasControlChars(text: string): boolean {
+	return CONTROL_RE.test(text);
+}
+
 /** As CONTROL_RE but a line feed is allowed: what a message body refuses. */
 const MESSAGE_FORBIDDEN_RE = new RegExp(
 	String.raw`[\u0000-\u0009\u000b-\u001f\u007f-\u009f${INVISIBLE}]`,

@@ -5,8 +5,8 @@
  */
 import type { BlockedUser } from "@tagalong/shared";
 import { kick, type Defer } from "../chat/notify.js";
-import { HttpError, nowIso } from "../lib/http.js";
-import { pairOf } from "./access.js";
+import { HttpError, LIVE_USER, nowIso } from "../lib/http.js";
+import { pairOf, SHOWN_NAME } from "./access.js";
 import { LIST_MAX } from "./limits.js";
 
 /**
@@ -21,9 +21,9 @@ export async function blockUser(env: Env, defer: Defer, me: string, target: stri
 	await env.DB.batch([
 		env.DB.prepare(
 			`INSERT INTO blocks (blocker_id, blocked_id, created_at)
-			 SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)
+			 SELECT ?, ?, ? WHERE ${LIVE_USER} AND ${LIVE_USER}
 			 ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
-		).bind(me, target, now, target),
+		).bind(me, target, now, target, me),
 		env.DB.prepare(
 			`UPDATE connections SET status = 'closed', responded_at = ?, closed_by = ?
 			 WHERE user_lo = ? AND user_hi = ? AND status IN ('pending', 'accepted')`,
@@ -49,7 +49,7 @@ export async function unblockUser(db: D1Database, me: string, target: string): P
 export async function listBlocks(db: D1Database, me: string): Promise<BlockedUser[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT b.blocked_id AS user_id, u.tagalong_name AS name, b.created_at AS blocked_at
+			`SELECT b.blocked_id AS user_id, ${SHOWN_NAME("u")} AS name, b.created_at AS blocked_at
 			 FROM blocks b JOIN users u ON u.id = b.blocked_id
 			 WHERE b.blocker_id = ? ORDER BY b.created_at DESC LIMIT ?`,
 		)

@@ -13,7 +13,7 @@ import {
 	type Connection,
 } from "@tagalong/shared";
 import { deferOf, kick } from "../chat/notify.js";
-import { HttpError, newId, nowIso, readJson } from "../lib/http.js";
+import { HttpError, LIVE_USER, newId, nowIso, readJson } from "../lib/http.js";
 import { connectionEvent, notify } from "../push/dispatch.js";
 import {
 	adult,
@@ -22,6 +22,7 @@ import {
 	loadConnection,
 	member,
 	NOT_BLOCKED,
+	SHOWN_NAME,
 	otherParty,
 	pairOf,
 	requireDm,
@@ -63,7 +64,7 @@ function toConnection(r: ConnectionWithOther, me: string): Connection {
 async function connectionView(db: D1Database, id: string, me: string): Promise<Connection> {
 	const row = await db
 		.prepare(
-			`SELECT ${CONNECTION_COLUMNS}, u.tagalong_name AS other_name, u.tagalong_city AS other_city
+			`SELECT ${CONNECTION_COLUMNS}, ${SHOWN_NAME("u")} AS other_name, u.tagalong_city AS other_city
 			 FROM connections c
 			 JOIN users u ON u.id = CASE WHEN c.user_lo = ? THEN c.user_hi ELSE c.user_lo END
 			 WHERE c.id = ? AND (c.user_lo = ? OR c.user_hi = ?)`,
@@ -85,7 +86,7 @@ const safetyAckRequired = () =>
 social.get("/connections", ...member, async (c) => {
 	const me = c.get("userId");
 	const { results } = await c.env.DB.prepare(
-		`SELECT ${CONNECTION_COLUMNS}, u.tagalong_name AS other_name, u.tagalong_city AS other_city
+		`SELECT ${CONNECTION_COLUMNS}, ${SHOWN_NAME("u")} AS other_name, u.tagalong_city AS other_city
 		 FROM connections c
 		 JOIN users u ON u.id = CASE WHEN c.user_lo = ? THEN c.user_hi ELSE c.user_lo END
 		 WHERE (c.user_lo = ? OR c.user_hi = ?) AND ${NOT_BLOCKED("u.id")}
@@ -139,6 +140,7 @@ social.post("/connections", ...member, async (c) => {
 			 SELECT ?, ?, ?, ?, 'pending', ?
 			 WHERE NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = ? AND b.blocked_id = ?)
 			   OR (b.blocker_id = ? AND b.blocked_id = ?))
+			   AND ${LIVE_USER} AND ${LIVE_USER}
 			 ON CONFLICT (user_lo, user_hi) DO UPDATE SET
 			   status = CASE WHEN ${theyAsked} THEN 'accepted' WHEN ${reopen} THEN 'pending'
 			     ELSE connections.status END,
@@ -149,7 +151,7 @@ social.post("/connections", ...member, async (c) => {
 			   requested_by = CASE WHEN ${reopen} THEN excluded.requested_by ELSE connections.requested_by END
 			 RETURNING id, created_at, responded_at`,
 		)
-		.bind(newId(), lo, hi, u.id, now, lo, hi, hi, lo)
+		.bind(newId(), lo, hi, u.id, now, lo, hi, hi, lo, lo, hi)
 		.first<{ id: string; created_at: string; responded_at: string | null }>();
 	if (!row) throw notFound;
 	const connection = await connectionView(db, row.id, u.id);
