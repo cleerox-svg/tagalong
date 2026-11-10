@@ -7,8 +7,9 @@ on a choice only the owner can make, it is under **Owner decisions** (§8) and
 is not answered here.
 
 Contact (support and privacy, both stores): **support@averrow.com**.
-Placeholder still to fill: `{{CONTROLLER}}` (the legal entity responsible for
-the data, and its country; §8).
+Placeholders still to fill: `{{CONTROLLER}}` (the legal entity responsible for
+the data, and its country) and `{{EFFECTIVE_DATE}}` (the date the privacy
+policy and terms take effect); both in §8.
 
 Public URLs (served by the web app on `https://tagalong.averrow.com`):
 
@@ -34,6 +35,24 @@ with Apple), Duffel, Booking.com, Ticketmaster, Eventbrite, Resend and
 Cloudflare (hosting, D1, logs). Google and Apple sign-in are where the account
 identity comes from. Frankfurter (exchange rates) receives currency codes
 only (`apps/api/src/providers/frankfurter.ts`).
+
+**Affiliate relationship.** Booking.com searches are sent with our affiliate
+id (`X-Affiliate-Id`, from the `BOOKING_AFFILIATE_ID` secret;
+`apps/api/src/providers/booking.ts`), so Booking.com may pay us a commission
+when a user books through a hotel link. No user data goes with that header:
+the search carries only the venue's coordinates, the dates and the party
+size. Affiliate status plays no part in which packages are shown or their
+order: the ranking weights are trip preferences only (transport, stay, seat,
+vibe, travel time, stay distance; `WEIGHTS` in
+`packages/shared/src/ranking.ts`) and never the provider.
+
+**Backups (D1 Time Travel).** Cloudflare D1 keeps point-in-time restore
+history for the whole database: 30 days on Workers Paid, 7 days on Workers
+Free. It is always on and cannot be turned off. So a deleted account, and
+pruned rate-limit rows holding IP addresses, can still be restored from that
+history (by us, through Cloudflare) for up to 30 days after deletion. Nothing
+reads that history in normal operation. Which plan applies is §8 open
+item 10.
 
 ### 1a. Account (`users`)
 
@@ -97,8 +116,8 @@ only (`apps/api/src/providers/frankfurter.ts`).
 
 | Data                         | Stored in                                                                                                                                                                                                                                                           | Purpose                                                                        | Sent to    | Retention                                                                                                                                                                                                                                       | On account deletion                            | Source                                                                                                                                                                                                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| IP addresses                 | `rate_limits.key` as `ip:<scope>:<IP>`, with a counter. Used on the four sign-in endpoints, the app code exchange and public share links. Rows written before the `ip:` prefix existed used `shared:`, `native-exchange:` and `signin:` and are pruned the same way | Abuse prevention (rate limiting) only                                          | None       | **Kept at most 24 hours** (the privacy policy's promise). In practice at most 7 hours: IP windows are 1 hour or less, the prune deletes an IP row once its window started more than 1 hour ago, and it runs every 6 hours (cron `23 */6 * * *`) | Not linked to an account                       | `apps/api/src/lib/rate-limit.ts` (`rateLimitByIp`, `pruneRateLimits`, `LEGACY_IP_KEY_PREFIXES`); `apps/api/src/auth/routes.ts`; `apps/api/src/auth/native.ts`; `apps/api/src/routes/trips.ts`; `apps/api/src/index.ts` (`scheduled`); `apps/api/wrangler.jsonc` (`triggers`) |
-| Per-user rate-limit counters | `rate_limits.key` as `<scope>:<user id>`                                                                                                                                                                                                                            | Rate limits on planning, Tagalong joins, messages, connects, reports and so on | None       | Deleted by the same prune once the window started more than 24 hours ago (no window is longer), so at most 30 hours after it started                                                                                                            | Not deleted directly; expire through the prune | `apps/api/src/lib/rate-limit.ts`; `apps/api/src/tagalong/limits.ts`; `apps/api/wrangler.jsonc` (`triggers`)                                                                                                                                                                  |
+| IP addresses                 | `rate_limits.key` as `ip:<scope>:<IP>`, with a counter. Used on the four sign-in endpoints, the app code exchange and public share links. Rows written before the `ip:` prefix existed used `shared:`, `native-exchange:` and `signin:` and are pruned the same way | Abuse prevention (rate limiting) only                                          | None       | **Kept at most 24 hours** (the privacy policy's promise). In normal operation at most 7 hours: IP windows are 1 hour or less, the prune runs every 6 hours (cron `23 */6 * * *`), and each run first deletes every IP row whose window started more than 1 hour ago. IP rows are pruned before anything else, one prefix at a time through the primary-key index, until none are left; a run stops early only past 5 million IP rows or 60 seconds, logs "rate-limit prune capped" (counts only) and leaves the rest to the next run, 6 hours later. Up to 30 days more in D1 Time Travel (§1) | Not linked to an account                       | `apps/api/src/lib/rate-limit.ts` (`rateLimitByIp`, `pruneRateLimits`, `LEGACY_IP_KEY_PREFIXES`); `apps/api/src/auth/routes.ts`; `apps/api/src/auth/native.ts`; `apps/api/src/routes/trips.ts`; `apps/api/src/index.ts` (`scheduled`); `apps/api/wrangler.jsonc` (`triggers`) |
+| Per-user rate-limit counters | `rate_limits.key` as `<scope>:<user id>`                                                                                                                                                                                                                            | Rate limits on planning, Tagalong joins, messages, connects, reports and so on | None       | Deleted by the same prune once the window started more than 24 hours ago (no window is longer), after the IP rows, up to 100,000 rows per run; so normally at most 30 hours after it started, longer only if a backlog exceeds that cap                                                                                                            | Not deleted directly; expire through the prune | `apps/api/src/lib/rate-limit.ts`; `apps/api/src/tagalong/limits.ts`; `apps/api/wrangler.jsonc` (`triggers`)                                                                                                                                                                  |
 | Worker logs                  | Cloudflare Workers Logs: `observability.enabled: true`, `head_sampling_rate: 1` (every request)                                                                                                                                                                     | Diagnosing errors                                                              | Cloudflare | Set by Cloudflare's plan, not by this repo (see §8)                                                                                                                                                                                             | Not deleted                                    | `apps/api/wrangler.jsonc`. The web Worker has no observability block (`apps/web/wrangler.jsonc`)                                                                                                                                                                             |
 
 **What the API logs.** Every `console.*` call in `apps/api/src` (tests excluded):
@@ -109,6 +128,7 @@ only (`apps/api/src/providers/frankfurter.ts`).
 | `index.ts` `console.log("saved-trip price check", r)`                                                                                                                | `{ checked, alerts }` counts                                                                                                              | No                                                                                                                  |
 | `index.ts` `console.error("saved-trip price check failed", err)`                                                                                                     | The error                                                                                                                                 | No                                                                                                                  |
 | `index.ts` `console.log("rate-limit prune", { deleted })` / `console.error("rate-limit prune failed")`                                                               | A row count / a fixed message (deliberately not the error, which could quote an IP key)                                                   | No                                                                                                                  |
+| `lib/rate-limit.ts` `console.warn("rate-limit prune capped", { ipDeleted, otherDeleted })` | Two row counts, when a prune hit its cap or time budget | No (never a key or an IP) |
 | `planning/run.ts` `console.error("plan failed", planId, err)`                                                                                                        | Plan UUID and the error (`ProviderError` messages are the provider name and an HTTP status; the FX one adds currency codes)               | Plan id only                                                                                                        |
 | `planning/live.ts` `console.warn("duffel offer failed", r.reason)`, `console.warn("duffel unavailable", err)`, `console.warn("booking.com search failed", r.reason)` | Provider name and HTTP status, or a timeout                                                                                               | No                                                                                                                  |
 | `planning/alerts.ts` `console.warn("price check failed for a saved trip", …)`                                                                                        | Error name and the first 200 characters of its message; deliberately no user id, email or trip                                            | No                                                                                                                  |
@@ -354,7 +374,7 @@ calls it "Budgetrip by Tagalong" with short name "Budgetrip"
 | Field                        | App Store                                                                                                      | Google Play                                                                                 |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | App name                     | Budgetrip by Tagalong (21 of 30)                                                                               | Budgetrip by Tagalong (21 of 30)                                                            |
-| Subtitle / short description | Event trips that fit a budget (29 of 30)                                                                       | Plan a trip to any event within your budget, with real prices and links to book. (80 of 80) |
+| Subtitle / short description | Event trips that fit a budget (29 of 30)                                                                       | Event trips within your budget: provider prices, labelled estimates, links out. (79 of 80) |
 | Primary category             | Travel                                                                                                         | Travel & Local                                                                              |
 | Secondary category           | Entertainment                                                                                                  | n/a                                                                                         |
 | Keywords (App Store only)    | `event,trip,planner,budget,concert,festival,game,tickets,hotel,flight,weekend,travel,meetup,group` (96 of 100) | n/a                                                                                         |
@@ -369,21 +389,22 @@ calls it "Budgetrip by Tagalong" with short name "Budgetrip"
 **Full description** (both stores):
 
 ```text
-Pick an event, set a budget, and Budgetrip finds five different ways to get there.
+Pick an event, set a budget, and Budgetrip finds up to five different ways to get there.
 
 Tell Budgetrip where you're starting from, the game, concert, festival, convention or meetup you want to see, your budget and what you like. Write it in your own words or fill in the form. Either way, you check every detail before anything is planned.
 
-FIVE TRIPS, ALL UNDER BUDGET
-You get up to five packages: tickets, getting there, a place to stay and things to do. Cheapest, best value, best experience, a weekend version and an alternative. Anything over your budget is left out.
+UP TO FIVE TRIPS THAT FIT YOUR BUDGET
+You get up to five packages: tickets, getting there, a place to stay and things to do. Cheapest, best value, best experience, a weekend version and an alternative. Anything over your budget is left out. Totals include ticket fees, hotel taxes, travel costs and a food allowance, using the prices when we checked.
 
 PRICES YOU CAN CHECK
 Ticket, flight and hotel prices come from the providers themselves, and each one shows when it was fetched. Where there's no live price, Budgetrip shows an estimate, labels it clearly and says how it worked the number out. Hit re-check for fresh prices any time.
 
 BOOK WITH THE SELLER
-Budgetrip doesn't sell tickets, flights or hotels. Every item links to the real seller, where you see the final price and book.
+Budgetrip doesn't sell tickets, flights or hotels. Tickets and hotels link to the seller; flights open a flight search for the same route and dates. You see the final price, and book, on the seller's site.
+Some links, such as Booking.com, are affiliate links: if you book, the seller may pay us a commission. It costs you nothing extra and never changes which packages we show or their order.
 
 SAVE, SHARE, GET ALERTS
-Save a trip and Budgetrip keeps checking it. If the price drops, you get an email or a notification. Share a read-only link with the people you're going with.
+Save a trip and Budgetrip keeps checking it. If the cheapest total drops, you get an email or a notification. Share a read-only link with the people you're going with.
 
 TAGALONG: MEET OTHER FANS GOING
 Turn on Tagalong to see who else is going to the same event, join the event's group chat, and plan together.
@@ -415,7 +436,7 @@ a price: the AI only reads the user's description into form fields
 | Users can communicate with each other (messaging and chat)                           | Yes              | Group chat and DMs after a mutual connect (`apps/api/src/routes/groups.ts`, `apps/api/src/routes/social.ts`)                                     |
 | Content controls                                                                     | Yes              | Block, report, moderation queue, rate limits and stricter limits for new accounts (`apps/api/src/tagalong/blocks.ts`, `reports.ts`, `limits.ts`) |
 | Users share location with each other                                                 | No               | City name only, chosen by the user (`packages/shared/src/tagalong.ts`, `TagalongCitySchema`)                                                     |
-| Unrestricted web access                                                              | No               | The app opens specific seller links; it has no browser with an address bar (`apps/web/src/PlanView.tsx`)                                         |
+| Unrestricted web access                                                              | No               | The app opens specific seller, flight-search and map links; it has no browser with an address bar (`apps/web/src/PlanView.tsx`)                  |
 | Advertising                                                                          | No               | No ad SDK (§2)                                                                                                                                   |
 | Gambling, contests, simulated gambling                                               | No               |                                                                                                                                                  |
 | Violence, sexual content, profanity, drugs, horror, mature themes (by the developer) | None             |                                                                                                                                                  |
@@ -439,10 +460,10 @@ Signing in
 Tap "Sign in with Apple" (or "Sign in with Google") on the first screen. Any Apple ID works; a new account is created on first sign-in. After signing in, confirm you are 18 or older and pick a currency.
 
 Planning (Budgetrip)
-Type a trip such as "From Toronto to see the Knicks at Madison Square Garden in March, $1,200 CAD for two" and tap "Fill in the form for me", or fill in the form yourself. Check the fields and tap Plan. Prices come from provider APIs (Ticketmaster, Duffel, Booking.com) and show an "as of" time; anything without a live price is labelled "estimate" with how it was worked out. The AI only turns the typed description into form fields; it never produces a price.
+Type a trip such as "From Toronto to see the Knicks at Madison Square Garden in March, $1,200 CAD for two" and tap "Fill in the form for me", or fill in the form yourself. Check the fields and tap Plan. Prices come from providers (Ticketmaster, Eventbrite, Duffel, Booking.com, or a pasted event page's own listing) and show an "as of" time; ticket fees and anything without a live price are labelled "estimate" with how they were worked out. The AI only turns the typed description into form fields; it never produces a price.
 
 Budgetrip links out and does not sell
-The app sells nothing and takes no payments. Each ticket, flight or hotel links to the seller's own website, where the user books. There are no in-app purchases.
+The app sells nothing and takes no payments. Tickets link to the event's seller, hotels to Booking.com, and flights to a flight search for the same route and dates; the user books there. Estimated costs (fees, fuel, parking, food) have no booking link; fuel and food open a map search instead. There are no in-app purchases.
 
 Tagalong (optional social features, 18+)
 Open a plan and tap "Who else is going?", then "Join Tagalong". Choose a first name and a city name (only those are shown to others). You can then join the event's group chat. Direct messages need both people to accept a connection, after a "meet in public places" safety note.
