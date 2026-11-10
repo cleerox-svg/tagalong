@@ -8,6 +8,9 @@ const config: CapacitorConfig = {
 	appId: "com.averrow.budgetrip",
 	appName: "Budgetrip",
 	webDir: "dist",
+	// WebView background before the first paint: the theme --bg, so the native
+	// splash hands over to the app without a white flash.
+	backgroundColor: "#0b0f1a",
 	server: {
 		// Serve the Android WebView from https://localhost so it is a secure
 		// context, matching iOS (capacitor://localhost) and the PWA.

@@ -14,6 +14,7 @@ import { moderation } from "./routes/moderation.js";
 import { social } from "./routes/social.js";
 import { tagalong } from "./routes/tagalong.js";
 import { checkSavedTrips } from "./planning/alerts.js";
+import { pruneRateLimits } from "./lib/rate-limit.js";
 
 const app = new Hono<AppEnv>();
 
@@ -55,12 +56,21 @@ export { ChatRoom } from "./chat/room.js";
 
 export default {
 	fetch: app.fetch,
-	// Cron Trigger (wrangler.jsonc): scheduled price checks for saved trips.
-	scheduled(_controller, env, ctx) {
+	// Cron Trigger (wrangler.jsonc): scheduled price checks for saved trips,
+	// and pruning of expired rate-limit rows (they hold client IPs). The two
+	// are independent: either failing leaves the other running.
+	scheduled(controller, env, ctx) {
 		ctx.waitUntil(
 			checkSavedTrips(env).then(
 				(r) => console.log("saved-trip price check", r),
 				(err) => console.error("saved-trip price check failed", err),
+			),
+		);
+		ctx.waitUntil(
+			pruneRateLimits(env.DB, controller.scheduledTime).then(
+				(deleted) => console.log("rate-limit prune", { deleted }),
+				// Generic message only: the error could quote a key, and keys hold IPs.
+				() => console.error("rate-limit prune failed"),
 			),
 		);
 	},

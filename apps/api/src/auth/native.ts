@@ -14,7 +14,7 @@
 import { NativeAuthExchangeSchema } from "@tagalong/shared";
 import { Hono } from "hono";
 import { HttpError, nowIso, readJson, type AppEnv } from "../lib/http.js";
-import { rateLimit } from "../lib/rate-limit.js";
+import { rateLimitByIp } from "../lib/rate-limit.js";
 import { assertJsonBody } from "../lib/security.js";
 import { assertUserExists, b64url, issueBearer } from "./session.js";
 
@@ -72,7 +72,7 @@ export const native = new Hono<AppEnv>();
  */
 native.post("/auth/native/exchange", async (c) => {
 	const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
-	await rateLimit(c.env.DB, `native-exchange:${ip}`, 20, 60);
+	await rateLimitByIp(c.env.DB, "native-exchange", ip, 20, 60);
 	assertJsonBody(c.req.header("Content-Type"));
 	const invalid = new HttpError(400, "invalid_code", "Sign-in failed. Try again.");
 
