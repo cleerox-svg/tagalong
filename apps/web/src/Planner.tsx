@@ -174,7 +174,7 @@ export function Planner({ me }: { me: Me }) {
 						<textarea
 							rows={3}
 							maxLength={2000}
-							placeholder="I'm in Toronto, I want to see the Knicks at MSG in March, $1,200 CAD for two of us, we'd rather drive, we like food and nightlife."
+							placeholder="e.g. I'm in Toronto, I want to see the Knicks at MSG in March, $1,200 CAD for two of us, we'd rather drive, we like food and nightlife."
 							value={text}
 							onChange={(e) => setText(e.target.value)}
 						/>
@@ -287,7 +287,7 @@ export function Planner({ me }: { me: Me }) {
 										value={form.event_city}
 										maxLength={100}
 										onChange={(e) => set("event_city", e.target.value)}
-										placeholder="Ottawa"
+										placeholder="e.g. Ottawa"
 									/>
 									{err("event_city")}
 								</label>
@@ -313,7 +313,7 @@ export function Planner({ me }: { me: Me }) {
 									<input
 										value={form.event_query}
 										onChange={(e) => set("event_query", e.target.value)}
-										placeholder="Knicks"
+										placeholder="e.g. Knicks"
 									/>
 									{err("event_query")}
 								</label>
@@ -322,7 +322,7 @@ export function Planner({ me }: { me: Me }) {
 									<input
 										value={form.event_city}
 										onChange={(e) => set("event_city", e.target.value)}
-										placeholder="New York"
+										placeholder="e.g. New York"
 									/>
 								</label>
 								<div className="row">
@@ -352,7 +352,7 @@ export function Planner({ me }: { me: Me }) {
 									<input
 										type="url"
 										inputMode="url"
-										placeholder="https://www.eventbrite.com/e/…"
+										placeholder="e.g. https://www.eventbrite.com/e/…"
 										value={link}
 										maxLength={2000}
 										onChange={(e) => setLink(e.target.value)}
@@ -427,7 +427,7 @@ export function Planner({ me }: { me: Me }) {
 								inputMode="decimal"
 								value={form.budget_amount}
 								onChange={(e) => set("budget_amount", e.target.value)}
-								placeholder="1200"
+								placeholder="e.g. 1200"
 							/>
 							{err("budget_amount")}
 						</label>

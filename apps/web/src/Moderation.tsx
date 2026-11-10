@@ -62,7 +62,7 @@ function ReportCard({
 						{m.deleted_at && (
 							<>
 								{" · "}
-								<span className="badge est">
+								<span className="badge flag">
 									deleted by {m.deleted_by ?? "someone"} {when(m.deleted_at)}
 								</span>
 							</>
@@ -78,7 +78,7 @@ function ReportCard({
 					{u.suspended && (
 						<>
 							{" "}
-							<span className="badge est">suspended</span>
+							<span className="badge flag">suspended</span>
 						</>
 					)}
 				</p>
