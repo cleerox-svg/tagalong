@@ -129,9 +129,10 @@ export function App() {
 
 	return (
 		<MeContext.Provider value={meCtx}>
-			<div className="shell">
-				<header className="top">
+			<header className="top">
+				<div className="top-inner">
 					<a className="brand" href="/" onClick={linkTo("/")}>
+						<span className="brand-dot" aria-hidden="true" />
 						Budgetrip
 					</a>
 					{session.state === "in" && (
@@ -182,8 +183,9 @@ export function App() {
 							</button>
 						</div>
 					)}
-				</header>
-
+				</div>
+			</header>
+			<div className="shell">
 				<main>
 					<p role="status" className={notice ? "notice" : "sr-only"}>
 						{notice}
@@ -247,7 +249,7 @@ function SignIn({ onSignedIn }: { onSignedIn: () => Promise<void> }) {
 	if (!isNative())
 		return (
 			<div className="signin-buttons">
-				<a className="button primary signin-button" href={api.signInUrl()}>
+				<a className="button google-signin signin-button" href={api.signInUrl()}>
 					<GoogleLogo />
 					<span>Sign in with Google</span>
 				</a>
@@ -278,7 +280,7 @@ function SignIn({ onSignedIn }: { onSignedIn: () => Promise<void> }) {
 			<div className="signin-buttons">
 				<button
 					type="button"
-					className="primary signin-button"
+					className="google-signin signin-button"
 					aria-busy={busy === "google"}
 					onClick={() => void start("google")}
 				>

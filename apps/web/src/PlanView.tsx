@@ -55,6 +55,20 @@ function LiveLine({ live }: { live: NonNullable<Plan["result"]>["live"] }) {
 	].filter(Boolean);
 	return parts.length ? <p className="muted">{parts.join(" ")}</p> : null;
 }
+/**
+ * The ticket-stub month and day ("MAR", "14") for a venue-local YYYY-MM-DD.
+ * Decorative: the full date is in the text beside it.
+ */
+function dateStub(localDate: string | null): { month: string; day: string } | null {
+	const m = localDate ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(localDate) : null;
+	if (!m) return null;
+	const month = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, 1))
+		.toLocaleString(undefined, { month: "short", timeZone: "UTC" })
+		.replace(".", "")
+		.toUpperCase();
+	return { month, day: String(Number(m[3])) };
+}
+
 const when = (iso: string) =>
 	new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
@@ -72,7 +86,10 @@ function Item({ i, home }: { i: PlanItem; home: string }) {
 				{i.is_estimate ? (
 					<span className="badge est">estimate</span>
 				) : (
-					<span className="badge src">{SOURCES[i.provider] ?? i.provider}</span>
+					<span className="badge src">
+						<span className="live-dot" aria-hidden="true" />
+						{SOURCES[i.provider] ?? i.provider}
+					</span>
 				)}
 				<span className="muted">
 					{i.is_estimate ? "table as of" : "as of"} {when(i.fetched_at)}
@@ -94,13 +111,16 @@ function Item({ i, home }: { i: PlanItem; home: string }) {
 function Package({
 	p,
 	was,
+	top,
 }: {
 	p: PlanPackage;
 	was?: { total_minor: number; currency: string } | undefined;
+	/** The first package in the server's ranked order: outlined, nothing more. */
+	top: boolean;
 }) {
 	const diff = was && was.currency === p.currency ? p.total_minor - was.total_minor : null;
 	return (
-		<article className="card package">
+		<article className={top ? "card package top" : "card package"}>
 			<header>
 				<span className="label">{LABELS[p.label]}</span>
 				<span className="total">{money(p.total_minor, p.currency)}</span>
@@ -324,8 +344,10 @@ export function PlanView(props: { id: string } | { token: string }) {
 		}
 	};
 
+	const stub = dateStub(plan.local_date);
+
 	return (
-		<>
+		<div className="plan wide">
 			{shared && (
 				<p className="note banner">
 					A trip someone shared with you — read only.{" "}
@@ -334,108 +356,131 @@ export function PlanView(props: { id: string } | { token: string }) {
 					</a>
 				</p>
 			)}
-			<section className="card">
-				<h1>{plan.event_name ?? plan.event_query}</h1>
-				<p className="muted">
-					From {plan.origin_city} · {plan.party_size} {plan.party_size === 1 ? "person" : "people"}{" "}
-					· budget {money(budget, plan.budget_currency)} total
-					{plan.local_date && ` · ${plan.local_date}`}
-					{plan.venue_name && ` · ${plan.venue_name}, ${plan.event_city ?? ""}`}
-				</p>
-				{(plan.status === "queued" || plan.status === "running") && (
-					<p className="progress" aria-live="polite">
-						{plan.progress ?? "Working…"}
-					</p>
-				)}
-				{plan.status === "failed" && <p className="error">{plan.error}</p>}
-				{plan.status === "done" && plan.result && (
-					<p className="muted">
-						{plan.result.within_budget} of {plan.result.considered} combinations fit your budget.
-						{plan.result.fx.map(
-							(r) => ` 1 ${r.from} = ${r.rate.toFixed(4)} ${r.to} (ECB, ${r.as_of}).`,
+			<div className="plan-layout">
+				<section className="card plan-summary">
+					<div className="plan-head">
+						{stub && (
+							<div className="date-stub" aria-hidden="true">
+								<span className="date-stub-month">{stub.month}</span>
+								<span className="date-stub-day">{stub.day}</span>
+							</div>
 						)}
-					</p>
-				)}
-				{plan.status === "done" && <LiveLine live={plan.result?.live} />}
-				{settled && (
-					<div className="recheck">
-						{plan.result?.prices_checked_at && (
-							<span className="muted">Prices checked {when(plan.result.prices_checked_at)}</span>
-						)}
-						{plan.previous && (
-							<span className="muted">
-								· previous check {when(plan.previous.prices_checked_at)}
-							</span>
-						)}
-						<button type="button" onClick={recheck} disabled={rechecking}>
-							{rechecking ? "Starting…" : "Re-check prices"}
-						</button>
+						<div>
+							<h1>{plan.event_name ?? plan.event_query}</h1>
+							<p className="muted">
+								From {plan.origin_city} · {plan.party_size}{" "}
+								{plan.party_size === 1 ? "person" : "people"} · budget{" "}
+								{money(budget, plan.budget_currency)} total
+								{plan.local_date && ` · ${plan.local_date}`}
+								{plan.venue_name && ` · ${plan.venue_name}, ${plan.event_city ?? ""}`}
+							</p>
+						</div>
 					</div>
-				)}
-				{!shared && plan.status === "done" && <SaveShare planId={plan.id} />}
-				{shared && plan.result?.prices_checked_at && (
-					<p className="muted">Prices checked {when(plan.result.prices_checked_at)}</p>
-				)}
-			</section>
-
-			{plan.status === "done" && plan.packages.length === 0 && plan.result && (
-				<section className="card">
-					<h2>Nothing fits this budget yet</h2>
-					<p>
-						We don't show trips over budget.
-						{plan.result.cheapest_over_budget_minor !== null &&
-							` The cheapest combination we found comes to about ${money(plan.result.cheapest_over_budget_minor, plan.budget_currency)}.`}{" "}
-						Try a bigger budget, fewer nights, or another date.
-					</p>
-				</section>
-			)}
-
-			{plan.status === "done" && plan.packages.length > 0 && plan.packages.length < 5 && (
-				<p className="note">
-					Only {plan.packages.length} genuinely different package
-					{plan.packages.length > 1 ? "s" : ""} fit your budget, so we're not padding the list with
-					near-copies.
-				</p>
-			)}
-
-			{plan.packages.map((p) => (
-				<Package key={p.id} p={p} was={plan.previous?.packages.find((x) => x.label === p.label)} />
-			))}
-
-			{!shared && plan.event_id && <WhoElse eventId={plan.event_id} />}
-
-			{!shared && plan.status === "done" && plan.result && plan.result.other_events.length > 0 && (
-				<section className="card">
-					<h2>Not the right event?</h2>
-					<ul className="others">
-						{plan.result.other_events.map((e) => (
-							<li key={e.ticketmaster_event_id}>
-								<span>
-									{e.name} — {e.local_date}
-									{e.venue_name && `, ${e.venue_name}`}
+					{(plan.status === "queued" || plan.status === "running") && (
+						<p className="progress" aria-live="polite">
+							{plan.progress ?? "Working…"}
+						</p>
+					)}
+					{plan.status === "failed" && <p className="error">{plan.error}</p>}
+					{plan.status === "done" && plan.result && (
+						<p className="muted">
+							{plan.result.within_budget} of {plan.result.considered} combinations fit your budget.
+							{plan.result.fx.map(
+								(r) => ` 1 ${r.from} = ${r.rate.toFixed(4)} ${r.to} (ECB, ${r.as_of}).`,
+							)}
+						</p>
+					)}
+					{plan.status === "done" && <LiveLine live={plan.result?.live} />}
+					{settled && (
+						<div className="recheck">
+							{plan.result?.prices_checked_at && (
+								<span className="muted">Prices checked {when(plan.result.prices_checked_at)}</span>
+							)}
+							{plan.previous && (
+								<span className="muted">
+									· previous check {when(plan.previous.prices_checked_at)}
 								</span>
-								<button
-									type="button"
-									onClick={async () => {
-										const { id: next } = await api.createPlan(
-											requestFrom(plan, e.ticketmaster_event_id),
-										);
-										navigate(`/plans/${next}`);
-									}}
-								>
-									Plan this one
-								</button>
-							</li>
-						))}
-					</ul>
+							)}
+							<button type="button" onClick={recheck} disabled={rechecking}>
+								{rechecking ? "Starting…" : "Re-check prices"}
+							</button>
+						</div>
+					)}
+					{!shared && plan.status === "done" && <SaveShare planId={plan.id} />}
+					{shared && plan.result?.prices_checked_at && (
+						<p className="muted">Prices checked {when(plan.result.prices_checked_at)}</p>
+					)}
 				</section>
-			)}
+
+				<div className="plan-main">
+					{plan.status === "done" && plan.packages.length === 0 && plan.result && (
+						<section className="card">
+							<h2>Nothing fits this budget yet</h2>
+							<p>
+								We don't show trips over budget.
+								{plan.result.cheapest_over_budget_minor !== null &&
+									` The cheapest combination we found comes to about ${money(plan.result.cheapest_over_budget_minor, plan.budget_currency)}.`}{" "}
+								Try a bigger budget, fewer nights, or another date.
+							</p>
+						</section>
+					)}
+
+					{plan.status === "done" && plan.packages.length > 0 && plan.packages.length < 5 && (
+						<p className="note">
+							Only {plan.packages.length} genuinely different package
+							{plan.packages.length > 1 ? "s" : ""} fit your budget, so we're not padding the list
+							with near-copies.
+						</p>
+					)}
+
+					{plan.packages.map((p, n) => (
+						<Package
+							key={p.id}
+							p={p}
+							top={n === 0}
+							was={plan.previous?.packages.find((x) => x.label === p.label)}
+						/>
+					))}
+
+					{!shared && plan.event_id && <WhoElse eventId={plan.event_id} />}
+
+					{!shared &&
+						plan.status === "done" &&
+						plan.result &&
+						plan.result.other_events.length > 0 && (
+							<section className="card">
+								<h2>Not the right event?</h2>
+								<ul className="others">
+									{plan.result.other_events.map((e) => (
+										<li key={e.ticketmaster_event_id}>
+											<span>
+												{e.name} — {e.local_date}
+												{e.venue_name && `, ${e.venue_name}`}
+											</span>
+											<button
+												type="button"
+												onClick={async () => {
+													const { id: next } = await api.createPlan(
+														requestFrom(plan, e.ticketmaster_event_id),
+													);
+													navigate(`/plans/${next}`);
+												}}
+											>
+												Plan this one
+											</button>
+										</li>
+									))}
+								</ul>
+							</section>
+						)}
+				</div>
+			</div>
 
 			<p>
 				<a href="/" onClick={linkTo("/")}>
 					← Plan another trip
 				</a>
 			</p>
-		</>
+		</div>
 	);
 }
