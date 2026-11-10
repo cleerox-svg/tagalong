@@ -312,7 +312,8 @@ code; this section is the order to do it in. Bundle id / package name:
 **Before either store (owner, open):**
 
 - Fill in the controller (`{{CONTROLLER}}`: the legal entity responsible for
-  the data, and its country) on /privacy and in Play's developer details.
+  the data, and its country) on /privacy and in Play's developer details, and
+  the effective date (`{{EFFECTIVE_DATE}}`) on /privacy and /terms.
 - Have /privacy and /terms legally reviewed before submitting
   (`docs/STORE_LISTING.md` §8, open items 1 and 2).
 - Do the §1f fill-ins: the Team ID in `apple-app-site-association`, the
@@ -333,6 +334,12 @@ changing it, regenerate the iOS and Android images and commit them:
 ```sh
 pnpm --filter @tagalong/web assets:generate
 ```
+
+The script (`apps/web/scripts/generate-native-assets.sh`) runs
+`pnpm dlx @capacitor/assets@4.0.0`, which pins only that package: its own
+dependencies are resolved fresh, outside the lockfile, on every run. So run it
+by hand only, never in CI, and review the diff of the generated images before
+committing.
 
 **Version bump (every upload).** The user-visible version and the build
 number move together on both platforms:
@@ -375,8 +382,9 @@ already used.
    `codesign -d --entitlements :- Payload/App.app`: it must show
    `aps-environment` = `production`. Then distribute again with **Upload**.
 6. **TestFlight.** After processing (minutes to an hour) the build appears
-   under TestFlight. Answer the export-compliance question (the app uses only
-   standard HTTPS encryption), add yourself as an internal tester and check
+   under TestFlight. Info.plist declares no non-exempt encryption
+   (`ITSAppUsesNonExemptEncryption` = `false`), so no export-compliance
+   prompt is expected. Add yourself as an internal tester and check
    sign-in (Google and Apple), planning, push and account deletion on a real
    iPhone.
 7. **App Privacy.** App Store Connect → your app → App Privacy: enter
@@ -459,8 +467,8 @@ Native icons and splash screens (`assets:generate`), the iOS privacy manifest
 within 7 hours (the privacy policy promises at most 24), and the store
 answers in `docs/STORE_LISTING.md`. No new migration, binding or secret.
 Owner steps: §1i (both stores), after the §1f fill-ins and §1g. Still open
-before submitting: the controller name and country, and a legal review of
-/privacy and /terms.
+before submitting: the controller name and country, the effective date, and
+a legal review of /privacy and /terms.
 
 ## 2. GitHub repository secrets
 

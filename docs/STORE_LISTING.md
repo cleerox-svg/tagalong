@@ -39,9 +39,9 @@ only (`apps/api/src/providers/frankfurter.ts`).
 **Affiliate relationship.** Booking.com searches are sent with our affiliate
 id (`X-Affiliate-Id`, from the `BOOKING_AFFILIATE_ID` secret;
 `apps/api/src/providers/booking.ts`), so Booking.com may pay us a commission
-when a user books through a hotel link. No user data goes with that header:
-the search carries only the venue's coordinates, the dates and the party
-size. Affiliate status plays no part in which packages are shown or their
+when a user books through a hotel link. The header identifies us, not the user:
+the search carries only the venue's coordinates, the dates, the party size
+and rooms, the plan currency and the booker country. Affiliate status plays no part in which packages are shown or their
 order: the ranking weights are trip preferences only (transport, stay, seat,
 vibe, travel time, stay distance; `WEIGHTS` in
 `packages/shared/src/ranking.ts`) and never the provider.
@@ -114,11 +114,11 @@ item 10.
 
 ### 1e. Security and operations
 
-| Data                         | Stored in                                                                                                                                                                                                                                                           | Purpose                                                                        | Sent to    | Retention                                                                                                                                                                                                                                       | On account deletion                            | Source                                                                                                                                                                                                                                                                       |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Data                         | Stored in                                                                                                                                                                                                                                                           | Purpose                                                                        | Sent to    | Retention                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | On account deletion                            | Source                                                                                                                                                                                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | IP addresses                 | `rate_limits.key` as `ip:<scope>:<IP>`, with a counter. Used on the four sign-in endpoints, the app code exchange and public share links. Rows written before the `ip:` prefix existed used `shared:`, `native-exchange:` and `signin:` and are pruned the same way | Abuse prevention (rate limiting) only                                          | None       | **Kept at most 24 hours** (the privacy policy's promise). In normal operation at most 7 hours: IP windows are 1 hour or less, the prune runs every 6 hours (cron `23 */6 * * *`), and each run first deletes every IP row whose window started more than 1 hour ago. IP rows are pruned before anything else, one prefix at a time through the primary-key index, until none are left; a run stops early only past 5 million IP rows or 60 seconds, logs "rate-limit prune capped" (counts only) and leaves the rest to the next run, 6 hours later. Up to 30 days more in D1 Time Travel (§1) | Not linked to an account                       | `apps/api/src/lib/rate-limit.ts` (`rateLimitByIp`, `pruneRateLimits`, `LEGACY_IP_KEY_PREFIXES`); `apps/api/src/auth/routes.ts`; `apps/api/src/auth/native.ts`; `apps/api/src/routes/trips.ts`; `apps/api/src/index.ts` (`scheduled`); `apps/api/wrangler.jsonc` (`triggers`) |
-| Per-user rate-limit counters | `rate_limits.key` as `<scope>:<user id>`                                                                                                                                                                                                                            | Rate limits on planning, Tagalong joins, messages, connects, reports and so on | None       | Deleted by the same prune once the window started more than 24 hours ago (no window is longer), after the IP rows, up to 100,000 rows per run; so normally at most 30 hours after it started, longer only if a backlog exceeds that cap                                                                                                            | Not deleted directly; expire through the prune | `apps/api/src/lib/rate-limit.ts`; `apps/api/src/tagalong/limits.ts`; `apps/api/wrangler.jsonc` (`triggers`)                                                                                                                                                                  |
-| Worker logs                  | Cloudflare Workers Logs: `observability.enabled: true`, `head_sampling_rate: 1` (every request)                                                                                                                                                                     | Diagnosing errors                                                              | Cloudflare | Set by Cloudflare's plan, not by this repo (see §8)                                                                                                                                                                                             | Not deleted                                    | `apps/api/wrangler.jsonc`. The web Worker has no observability block (`apps/web/wrangler.jsonc`)                                                                                                                                                                             |
+| Per-user rate-limit counters | `rate_limits.key` as `<scope>:<user id>`                                                                                                                                                                                                                            | Rate limits on planning, Tagalong joins, messages, connects, reports and so on | None       | Deleted by the same prune once the window started more than 24 hours ago (no window is longer), after the IP rows, up to 100,000 rows per run; so normally at most 30 hours after it started, longer only if a backlog exceeds that cap                                                                                                                                                                                                                                                                                                                                                        | Not deleted directly; expire through the prune | `apps/api/src/lib/rate-limit.ts`; `apps/api/src/tagalong/limits.ts`; `apps/api/wrangler.jsonc` (`triggers`)                                                                                                                                                                  |
+| Worker logs                  | Cloudflare Workers Logs: `observability.enabled: true`, `head_sampling_rate: 1` (every request)                                                                                                                                                                     | Diagnosing errors                                                              | Cloudflare | Set by Cloudflare's plan, not by this repo (see §8)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Not deleted                                    | `apps/api/wrangler.jsonc`. The web Worker has no observability block (`apps/web/wrangler.jsonc`)                                                                                                                                                                             |
 
 **What the API logs.** Every `console.*` call in `apps/api/src` (tests excluded):
 
@@ -128,7 +128,7 @@ item 10.
 | `index.ts` `console.log("saved-trip price check", r)`                                                                                                                | `{ checked, alerts }` counts                                                                                                              | No                                                                                                                  |
 | `index.ts` `console.error("saved-trip price check failed", err)`                                                                                                     | The error                                                                                                                                 | No                                                                                                                  |
 | `index.ts` `console.log("rate-limit prune", { deleted })` / `console.error("rate-limit prune failed")`                                                               | A row count / a fixed message (deliberately not the error, which could quote an IP key)                                                   | No                                                                                                                  |
-| `lib/rate-limit.ts` `console.warn("rate-limit prune capped", { ipDeleted, otherDeleted })` | Two row counts, when a prune hit its cap or time budget | No (never a key or an IP) |
+| `lib/rate-limit.ts` `console.warn("rate-limit prune capped", { ipDeleted, otherDeleted })`                                                                           | Two row counts, when a prune hit its cap or time budget                                                                                   | No (never a key or an IP)                                                                                           |
 | `planning/run.ts` `console.error("plan failed", planId, err)`                                                                                                        | Plan UUID and the error (`ProviderError` messages are the provider name and an HTTP status; the FX one adds currency codes)               | Plan id only                                                                                                        |
 | `planning/live.ts` `console.warn("duffel offer failed", r.reason)`, `console.warn("duffel unavailable", err)`, `console.warn("booking.com search failed", r.reason)` | Provider name and HTTP status, or a timeout                                                                                               | No                                                                                                                  |
 | `planning/alerts.ts` `console.warn("price check failed for a saved trip", …)`                                                                                        | Error name and the first 200 characters of its message; deliberately no user id, email or trip                                            | No                                                                                                                  |
@@ -371,20 +371,20 @@ The app is called **Budgetrip**: `appName: "Budgetrip"` in
 calls it "Budgetrip by Tagalong" with short name "Budgetrip"
 (`apps/web/public/manifest.webmanifest`). Tagalong is its social layer.
 
-| Field                        | App Store                                                                                                      | Google Play                                                                                 |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| App name                     | Budgetrip by Tagalong (21 of 30)                                                                               | Budgetrip by Tagalong (21 of 30)                                                            |
+| Field                        | App Store                                                                                                      | Google Play                                                                                |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| App name                     | Budgetrip by Tagalong (21 of 30)                                                                               | Budgetrip by Tagalong (21 of 30)                                                           |
 | Subtitle / short description | Event trips that fit a budget (29 of 30)                                                                       | Event trips within your budget: provider prices, labelled estimates, links out. (79 of 80) |
-| Primary category             | Travel                                                                                                         | Travel & Local                                                                              |
-| Secondary category           | Entertainment                                                                                                  | n/a                                                                                         |
-| Keywords (App Store only)    | `event,trip,planner,budget,concert,festival,game,tickets,hotel,flight,weekend,travel,meetup,group` (96 of 100) | n/a                                                                                         |
-| Support URL                  | https://tagalong.averrow.com/support                                                                           | Website: https://tagalong.averrow.com/support                                               |
-| Privacy policy URL           | https://tagalong.averrow.com/privacy                                                                           | https://tagalong.averrow.com/privacy                                                        |
-| Terms (EULA)                 | https://tagalong.averrow.com/terms                                                                             | https://tagalong.averrow.com/terms                                                          |
-| Account deletion URL         | n/a (in-app)                                                                                                   | https://tagalong.averrow.com/delete-account                                                 |
-| Contact email                | support@averrow.com                                                                                            | support@averrow.com                                                                         |
-| Devices                      | iPhone only (`TARGETED_DEVICE_FAMILY = 1` in `apps/web/ios/App/App.xcodeproj/project.pbxproj`)                 | Phones                                                                                      |
-| Screenshots                  | 6.9" iPhone display only; no iPad screenshots (the app does not run as an iPad app)                            | Phone screenshots                                                                           |
+| Primary category             | Travel                                                                                                         | Travel & Local                                                                             |
+| Secondary category           | Entertainment                                                                                                  | n/a                                                                                        |
+| Keywords (App Store only)    | `event,trip,planner,budget,concert,festival,game,tickets,hotel,flight,weekend,travel,meetup,group` (96 of 100) | n/a                                                                                        |
+| Support URL                  | https://tagalong.averrow.com/support                                                                           | Website: https://tagalong.averrow.com/support                                              |
+| Privacy policy URL           | https://tagalong.averrow.com/privacy                                                                           | https://tagalong.averrow.com/privacy                                                       |
+| Terms (EULA)                 | https://tagalong.averrow.com/terms                                                                             | https://tagalong.averrow.com/terms                                                         |
+| Account deletion URL         | n/a (in-app)                                                                                                   | https://tagalong.averrow.com/delete-account                                                |
+| Contact email                | support@averrow.com                                                                                            | support@averrow.com                                                                        |
+| Devices                      | iPhone only (`TARGETED_DEVICE_FAMILY = 1` in `apps/web/ios/App/App.xcodeproj/project.pbxproj`)                 | Phones                                                                                     |
+| Screenshots                  | 6.9" iPhone display only; no iPad screenshots (the app does not run as an iPad app)                            | Phone screenshots                                                                          |
 
 **Full description** (both stores):
 
@@ -421,8 +421,16 @@ The copy describes features the code has: the confirm-before-plan step
 (`apps/web/src/Planner.tsx`), five labelled packages and the budget filter
 (`packages/shared/src/ranking.ts`), "as of" times and estimate labels
 (`apps/web/src/PlanView.tsx`), link-out only (`docs/BUILD_SPEC.md` §2.2),
-re-check (`apps/api/src/routes/plans.ts`), alerts
-(`apps/api/src/planning/alerts.ts`), share links
+where tickets use the event's own URL, hotels a Booking.com property or
+search link, and flights a Google Flights search
+(`packages/shared/src/candidates.ts`, `apps/api/src/providers/booking.ts`,
+`apps/api/src/providers/duffel.ts`), totals that add ticket-fee, lodging-tax
+and food-allowance lines (`buildCandidates` in
+`packages/shared/src/candidates.ts`; a Booking.com price that already
+includes taxes replaces the tax estimate, `apps/api/src/planning/live.ts`),
+the affiliate line (§1; ranking ignores provider and affiliate status),
+re-check (`apps/api/src/routes/plans.ts`), alerts on a drop in the cheapest
+saved total (`apps/api/src/planning/alerts.ts`), share links
 (`apps/api/src/routes/trips.ts`) and Tagalong's rules (`docs/BUILD_SPEC.md`
 §6, `apps/api/src/tagalong/`). It never says the AI finds, sets or estimates
 a price: the AI only reads the user's description into form fields
@@ -506,18 +514,19 @@ open item 7.
 
 ### Open
 
-Items 1 and 2 must be done before submitting. Items 3 to 9 are also still
-open: the code's current behaviour is stated, and the answer is yours.
+Items 1 and 2 must be done before submitting. The other items are also
+still open: the code's current behaviour is stated, and the answer is yours.
 
-1. **Controller.** Fill `{{CONTROLLER}}` (the legal entity responsible for
-   the data, and its country), which the privacy policy and Play's developer
-   details need.
+1. **Controller and effective date.** Fill `{{CONTROLLER}}` (the legal
+   entity responsible for the data, and its country), which the privacy
+   policy and Play's developer details need, and `{{EFFECTIVE_DATE}}` (the
+   date the privacy policy and terms take effect).
 2. **Legal review of /privacy and /terms** before submitting to either store,
    including the readings this file relies on (Play's service-provider
    exemption in §4, the retention choices below).
 3. **Declare security-only IP use?** IP addresses are stored only as
-   rate-limit keys, for abuse prevention, kept at most 24 hours (in practice
-   at most 7), not linked to an account (§1e). Cloudflare's own logs also see them. Decide whether the
+   rate-limit keys, for abuse prevention, kept at most 24 hours (in normal
+   operation at most 7), not linked to an account (§1e). Cloudflare's own logs also see them. Decide whether the
    privacy labels declare this (and under which type), or whether the privacy
    policy alone covers it.
 4. **Retention of tombstones, reports and suspended identities.** Currently
@@ -532,13 +541,15 @@ open: the code's current behaviour is stated, and the answer is yours.
    `trip_requests.prefs_json`, never shown on share links). Decide whether to
    declare it as Health (Apple) / Health info (Play) or keep it under other
    user content.
-6. **Third-party AI disclosure.** The free-text description goes to Anthropic
-   (§1b), and the planner screen does not say so (`apps/web/src/Planner.tsx`
-   only says "Describe it in your own words"). App Review guideline 5.1.2(i)
-   asks apps to disclose sharing personal data with third-party AI and get
-   permission first. Decide on the wording (a line under the box is enough
-   for the form-only path, which never calls the AI) and have it added to
-   the planner screen and the privacy policy.
+6. **Third-party AI disclosure: done, one question left.** The planner now
+   says, under the description box and before anything is sent, that the
+   text goes to Anthropic's Claude AI, what it is used for, and links the
+   privacy policy (`apps/web/src/Planner.tsx`, the `ai-note` paragraph); the
+   form-only path never calls the AI. /privacy lists Anthropic as a recipient
+   (`apps/web/src/Legal.tsx`). Remaining question: the app treats tapping
+   "Fill in the form for me" after that notice as the permission App Review
+   guideline 5.1.2(i) asks for. Confirm that is sufficient, or ask for an
+   explicit opt-in.
 7. **Review account, demo content and moderators.** Decide whether to give
    reviewers a prepared account or group with a second member, so they can
    see chat, block and report without a second device. Also set
@@ -556,3 +567,8 @@ open: the code's current behaviour is stated, and the answer is yours.
    (`apps/api/wrangler.jsonc`). How long Cloudflare keeps the logs depends on
    the account's plan (see Cloudflare's Workers Logs documentation). State
    that period in the privacy policy, or lower `head_sampling_rate`.
+10. **D1 Time Travel and the Cloudflare plan.** D1 keeps point-in-time
+    restore history (30 days on Workers Paid, 7 on Workers Free) and it cannot
+    be turned off, so deleted accounts and pruned IP rows stay restorable for
+    that long (§1). Confirm which plan the account is on, and state that
+    period in the privacy policy.

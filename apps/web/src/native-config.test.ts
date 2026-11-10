@@ -5,6 +5,9 @@ import { describe, expect, it } from "vitest";
 import storeListingRaw from "../../../docs/STORE_LISTING.md?raw";
 import capacitorConfigRaw from "../capacitor.config.ts?raw";
 import androidManifestRaw from "../android/app/src/main/AndroidManifest.xml?raw";
+import launcherBackgroundRaw from "../android/app/src/main/res/values/ic_launcher_background.xml?raw";
+import stylesRaw from "../android/app/src/main/res/values/styles.xml?raw";
+import dataExtractionRulesRaw from "../android/app/src/main/res/xml/data_extraction_rules.xml?raw";
 import appGradleRaw from "../android/app/build.gradle?raw";
 import variablesGradleRaw from "../android/variables.gradle?raw";
 import entitlementsRaw from "../ios/App/App/App.entitlements?raw";
@@ -317,12 +320,22 @@ describe("Info.plist", () => {
 		expect(caps).toContain("arm64");
 		expect(caps).not.toContain("armv7");
 	});
+
+	it("has no iPad orientation key (the app is iPhone only)", () => {
+		expect(Object.hasOwn(info, "UISupportedInterfaceOrientations~ipad")).toBe(false);
+		expect(infoPlistRaw).not.toContain("UISupportedInterfaceOrientations~ipad");
+	});
 });
 
 describe("AndroidManifest.xml", () => {
 	it("disables backup", () => {
 		const app = /<application\b[^>]*>/.exec(androidManifestRaw)?.[0] ?? "";
 		expect(app).toContain('android:allowBackup="false"');
+	});
+
+	it("points Android 12+ at the data extraction rules", () => {
+		const app = /<application\b[^>]*>/.exec(androidManifestRaw)?.[0] ?? "";
+		expect(app).toContain('android:dataExtractionRules="@xml/data_extraction_rules"');
 	});
 
 	it("asks for exactly INTERNET and POST_NOTIFICATIONS", () => {
@@ -405,5 +418,62 @@ describe("App Store icon", () => {
 		expect(chunks[0]).toBe("IHDR");
 		expect(chunks.at(-1)).toBe("IEND");
 		expect(chunks).not.toContain("tRNS");
+	});
+});
+
+describe("Android data extraction rules", () => {
+	const DOMAINS = ["root", "file", "database", "sharedpref", "external"];
+	const xml = dataExtractionRulesRaw.replace(/<!--[\s\S]*?-->/g, "");
+
+	it("exists at res/xml/data_extraction_rules.xml", () => {
+		expect(
+			existsSync(
+				new URL("../android/app/src/main/res/xml/data_extraction_rules.xml", import.meta.url),
+			),
+		).toBe(true);
+	});
+
+	it("excludes every domain from both cloud backup and device transfer, and includes nothing", () => {
+		expect(xml).not.toMatch(/<include\b/);
+		for (const section of ["cloud-backup", "device-transfer"]) {
+			const body = new RegExp(`<${section}\\b[^>]*>([\\s\\S]*?)</${section}>`).exec(xml)?.[1];
+			expect(body, section).toBeDefined();
+			const excludes = [...(body ?? "").matchAll(/<exclude\b([^>]*)\/>/g)].map((m) => ({
+				domain: /\bdomain="([^"]+)"/.exec(m[1] ?? "")?.[1],
+				path: /\bpath="([^"]+)"/.exec(m[1] ?? "")?.[1],
+			}));
+			for (const domain of DOMAINS)
+				expect(excludes, `${section} ${domain}`).toContainEqual({ domain, path: "." });
+		}
+	});
+});
+
+describe("Android splash and window background", () => {
+	const style = (name: string): string =>
+		new RegExp(`<style\\s+name="${name.replace(/\./g, "\\.")}"[^>]*>([\\s\\S]*?)</style>`).exec(
+			stylesRaw,
+		)?.[1] ?? "";
+	const item = (body: string, name: string): string | undefined =>
+		new RegExp(`<item\\s+name="${name}">([^<]*)</item>`).exec(body)?.[1]?.trim();
+
+	it("AppTheme.NoActionBar paints the window with splash_background", () => {
+		expect(item(style("AppTheme.NoActionBar"), "android:windowBackground")).toBe(
+			"@color/splash_background",
+		);
+	});
+
+	it("AppTheme.NoActionBarLaunch hands over to AppTheme.NoActionBar", () => {
+		expect(item(style("AppTheme.NoActionBarLaunch"), "postSplashScreenTheme")).toBe(
+			"@style/AppTheme.NoActionBar",
+		);
+	});
+
+	it("splash_background is #0B0F1A, the capacitor.config.ts backgroundColor", () => {
+		const color = /<color\s+name="splash_background">([^<]*)<\/color>/.exec(
+			launcherBackgroundRaw,
+		)?.[1];
+		expect(color?.trim().toUpperCase()).toBe("#0B0F1A");
+		const capBg = /\bbackgroundColor:\s*"([^"]+)"/.exec(capacitorConfigRaw)?.[1];
+		expect(capBg?.toUpperCase()).toBe(color?.trim().toUpperCase());
 	});
 });
