@@ -6,8 +6,9 @@ If the code changes, update this file in the same PR. Where an answer depends
 on a choice only the owner can make, it is under **Owner decisions** (§8) and
 is not answered here.
 
-Placeholders: `{{CONTACT_EMAIL}}` (support and privacy contact) and
-`{{CONTROLLER}}` (the legal entity responsible for the data, and its country).
+Contact (support and privacy, both stores): **support@averrow.com**.
+Placeholder still to fill: `{{CONTROLLER}}` (the legal entity responsible for
+the data, and its country; §8).
 
 Public URLs (served by the web app on `https://tagalong.averrow.com`):
 
@@ -41,7 +42,7 @@ only (`apps/api/src/providers/frankfurter.ts`).
 | Email address                                                   | `users.email`                                                                                                      | Account identity; shown to the user on their account screen; recipient of price-drop emails                                | Comes from Google or Apple sign-in. Sent to Resend only when a price-drop email goes out                      | Until deletion. Updated on every Google sign-in; an Apple sign-in updates it only when Apple supplies a verified address | Cleared (`''`)                                                                               | `migrations/0002_budgetrip.sql`; `apps/api/src/auth/routes.ts` (`googleUser`, `appleUser`); `apps/api/src/routes/account.ts`                                                                   |
 | Apple private relay address                                     | `users.email`                                                                                                      | As above. Stored only when Apple marks the email verified; otherwise the account has no email and no alert emails are sent | Resend, as above                                                                                              | As above                                                                                                                 | Cleared                                                                                      | `apps/api/src/auth/routes.ts` (`appleUser`); `apps/api/src/planning/alerts.ts` ("an Apple account that shared no email address")                                                               |
 | Display name                                                    | `users.display_name`                                                                                               | Account label for the user. Not shown to other users (Tagalong shows `tagalong_name`)                                      | Comes from Google's `name` claim or Apple's first-sign-in name, else the email's local part, else "Traveller" | Until deletion                                                                                                           | Replaced with "Deleted user"                                                                 | `apps/api/src/auth/routes.ts`; `apps/api/src/tagalong/access.ts`                                                                                                                               |
-| Home city                                                       | `users.home_city`                                                                                                  | Default for the Tagalong city field                                                                                        | None                                                                                                          | Until deletion                                                                                                           | Cleared                                                                                      | Accepted by `POST /me/onboarding` (`apps/api/src/auth/routes.ts`), but the current onboarding screen does not send it (`apps/web/src/Onboarding.tsx`). Read in `apps/web/src/TagalongGate.tsx` |
+| Home city                                                       | `users.home_city`                                                                                                  | Default for the Tagalong city field. Declared as approximate location (§2, §4)                                             | None                                                                                                          | Until deletion                                                                                                           | Cleared                                                                                      | Accepted by `POST /me/onboarding` (`apps/api/src/auth/routes.ts`), but the current onboarding screen does not send it (`apps/web/src/Onboarding.tsx`). Read in `apps/web/src/TagalongGate.tsx` |
 | Home coordinates                                                | `users.home_lat`, `users.home_lng`                                                                                 | None. The columns exist, but no code writes them, so they are always NULL                                                  | None                                                                                                          | n/a                                                                                                                      | Cleared                                                                                      | `migrations/0002_budgetrip.sql`; no writer anywhere in `apps/api/src`                                                                                                                          |
 | Home currency                                                   | `users.home_currency`                                                                                              | Default budget currency                                                                                                    | None                                                                                                          | Until deletion                                                                                                           | Cleared                                                                                      | `apps/api/src/auth/routes.ts` (`/me/onboarding`)                                                                                                                                               |
 | 18+ confirmation                                                | `users.birthdate_verified_18`, `users.age_confirmed_at`                                                            | 18+ self-declaration, needed before planning or Tagalong. No birthdate is collected                                        | None                                                                                                          | Until deletion                                                                                                           | Reset to 0 / NULL                                                                            | `apps/api/src/auth/routes.ts`; `apps/api/src/auth/session.ts` (`requireAdult`)                                                                                                                 |
@@ -96,8 +97,8 @@ only (`apps/api/src/providers/frankfurter.ts`).
 
 | Data                         | Stored in                                                                                                                                | Purpose                                                                        | Sent to    | Retention                                                                                                         | On account deletion                            | Source                                                                                                                                                                                                     |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| IP addresses                 | `rate_limits.key` as `ip:<scope>:<IP>`, with a counter. Used on the four sign-in endpoints, the app code exchange and public share links | Abuse prevention (rate limiting) only                                          | None       | **Kept up to 24 hours for abuse prevention** (pruned by the scheduled job; IP rows use windows of 1 hour or less) | Not linked to an account                       | `apps/api/src/lib/rate-limit.ts` (`rateLimitByIp`, `pruneRateLimits`); `apps/api/src/auth/routes.ts`; `apps/api/src/auth/native.ts`; `apps/api/src/routes/trips.ts`; `apps/api/src/index.ts` (`scheduled`) |
-| Per-user rate-limit counters | `rate_limits.key` as `<scope>:<user id>`                                                                                                 | Rate limits on planning, Tagalong joins, messages, connects, reports and so on | None       | Up to 24 hours after the window, removed by the same prune                                                        | Not deleted directly; expire through the prune | `apps/api/src/lib/rate-limit.ts`; `apps/api/src/tagalong/limits.ts`                                                                                                                                        |
+| IP addresses | `rate_limits.key` as `ip:<scope>:<IP>`, with a counter. Used on the four sign-in endpoints, the app code exchange and public share links. Rows written before the `ip:` prefix existed used `shared:`, `native-exchange:` and `signin:` and are pruned the same way | Abuse prevention (rate limiting) only | None | **Kept at most 24 hours** (the privacy policy's promise). In practice at most 7 hours: IP windows are 1 hour or less, the prune deletes an IP row once its window started more than 1 hour ago, and it runs every 6 hours (cron `23 */6 * * *`) | Not linked to an account | `apps/api/src/lib/rate-limit.ts` (`rateLimitByIp`, `pruneRateLimits`, `LEGACY_IP_KEY_PREFIXES`); `apps/api/src/auth/routes.ts`; `apps/api/src/auth/native.ts`; `apps/api/src/routes/trips.ts`; `apps/api/src/index.ts` (`scheduled`); `apps/api/wrangler.jsonc` (`triggers`) |
+| Per-user rate-limit counters | `rate_limits.key` as `<scope>:<user id>` | Rate limits on planning, Tagalong joins, messages, connects, reports and so on | None | Deleted by the same prune once the window started more than 24 hours ago (no window is longer), so at most 30 hours after it started | Not deleted directly; expire through the prune | `apps/api/src/lib/rate-limit.ts`; `apps/api/src/tagalong/limits.ts`; `apps/api/wrangler.jsonc` (`triggers`) |
 | Worker logs                  | Cloudflare Workers Logs: `observability.enabled: true`, `head_sampling_rate: 1` (every request)                                          | Diagnosing errors                                                              | Cloudflare | Set by Cloudflare's plan, not by this repo (see §8)                                                               | Not deleted                                    | `apps/api/wrangler.jsonc`. The web Worker has no observability block (`apps/web/wrangler.jsonc`)                                                                                                           |
 
 **What the API logs.** Every `console.*` call in `apps/api/src` (tests excluded):
@@ -153,7 +154,19 @@ prevention and security, which includes moderation.
 | Search History                         | Event searches and trip requests (event, cities, dates, budget) saved with the account            | Yes    | No       | App Functionality |
 | Identifiers → User ID                  | Account id, Google/Apple account id                                                               | Yes    | No       | App Functionality |
 | Identifiers → Device ID                | Push notification token                                                                           | Yes    | No       | App Functionality |
+| Location → Coarse Location             | Cities the user types or picks (see below). Never read from the device                            | Yes    | No       | App Functionality |
 | Other Data → Other Data Types          | 18+ self-declaration, home currency                                                               | Yes    | No       | App Functionality |
+
+**Coarse Location (owner decision, §8).** The app never reads device
+location. The cities it stores against the account are declared as coarse
+location: the trip origin (the typed or picked city's label, plus that city
+centre's coordinates from Google Places, 4 decimal places, in
+`trip_requests`; `apps/api/src/routes/plans.ts`), the Tagalong city shown to
+others (`users.tagalong_city`; `apps/api/src/routes/tagalong.ts`) and the
+home city (`users.home_city`, accepted by `POST /me/onboarding` in
+`apps/api/src/auth/routes.ts`). `users.home_lat` / `home_lng` exist but no
+code writes them today (§1a); if a geocoded home city is added later, it is
+covered by this same declaration.
 
 **Not collected:** Health & Fitness, Financial Info, Contacts, Photos or
 Videos, Audio, Gameplay, Customer Support, Browsing History, Usage Data,
@@ -163,13 +176,17 @@ photos permission (`apps/web/ios/App/App/Info.plist`,
 `apps/web/android/app/src/main/AndroidManifest.xml`: only `INTERNET` and
 `POST_NOTIFICATIONS`).
 
-**Open:** Coarse Location (a typed city) and Health (accessibility notes); see
-§8 items 2 and 5. IP addresses for security: see §8 item 3.
+**Open:** Health (accessibility notes), §8 open item 5; IP addresses for
+security, §8 open item 3.
 
 ## 3. `PrivacyInfo.xcprivacy`: `NSPrivacyCollectedDataTypes`
 
-Paste inside the `NSPrivacyCollectedDataTypes` `<array>` of
-`apps/web/ios/App/App/PrivacyInfo.xcprivacy`. It matches §2 exactly.
+The `NSPrivacyCollectedDataTypes` `<array>` of
+`apps/web/ios/App/App/PrivacyInfo.xcprivacy` holds exactly these nine
+entries, in this order. They match §2 and §4 one for one (Play's
+"Approximate location" is Apple's Coarse Location; Play has no separate
+"other data" row for the 18+ flag and currency). Keep the file, §2 and §4 in
+step.
 
 ```xml
 <dict>
@@ -258,6 +275,18 @@ Paste inside the `NSPrivacyCollectedDataTypes` `<array>` of
 </dict>
 <dict>
 	<key>NSPrivacyCollectedDataType</key>
+	<string>NSPrivacyCollectedDataTypeCoarseLocation</string>
+	<key>NSPrivacyCollectedDataTypeLinked</key>
+	<true/>
+	<key>NSPrivacyCollectedDataTypeTracking</key>
+	<false/>
+	<key>NSPrivacyCollectedDataTypePurposes</key>
+	<array>
+		<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+	</array>
+</dict>
+<dict>
+	<key>NSPrivacyCollectedDataType</key>
 	<string>NSPrivacyCollectedDataTypeOtherDataTypes</string>
 	<key>NSPrivacyCollectedDataTypeLinked</key>
 	<true/>
@@ -270,11 +299,9 @@ Paste inside the `NSPrivacyCollectedDataTypes` `<array>` of
 </dict>
 ```
 
-Add only if the owner answers yes to §8 item 2 (coarse location) or item 5
-(health), and change §2 and §4 to match. Each has the same shape, with
-`NSPrivacyCollectedDataTypeCoarseLocation` or
-`NSPrivacyCollectedDataTypeHealth` as the type, Linked true, Tracking false,
-purpose `NSPrivacyCollectedDataTypePurposeAppFunctionality`.
+If the owner answers yes to §8 open item 5 (health), add one more entry of
+the same shape with `NSPrivacyCollectedDataTypeHealth` as the type, and
+change §2 and §4 to match.
 
 `NSPrivacyTracking` stays `false` and `NSPrivacyTrackingDomains` stays empty.
 The Firebase Messaging and Capacitor SDKs ship their own privacy manifests,
@@ -301,17 +328,21 @@ which Xcode merges into the privacy report; check the generated report
 | App activity → In-app search history        | Yes              | Required to plan                                                                | App functionality                                                                      |
 | App activity → Other user-generated content | Yes              | Optional (trip description, accessibility notes, interest line, report details) | App functionality, Fraud prevention, security, and compliance (reports)                |
 | Device or other IDs                         | Yes (push token) | Optional (only if notifications are allowed)                                    | App functionality                                                                      |
+| Location → Approximate location             | Yes              | Required to plan (trip origin city); Tagalong and home city are optional        | App functionality                                                                      |
 
 Price-drop emails come with saving a trip (on by default, off per trip under
 My trips), so they are App functionality, not Developer communications
 (`migrations/0004_saved_trips_shares_alerts.sql` `alerts_enabled DEFAULT 1`;
 `apps/api/src/routes/trips.ts`; `apps/api/src/planning/alerts.ts`).
 
-**Not collected:** Financial info, Health and fitness (pending §8 item 5),
-Precise location, Approximate location (pending §8 item 2), Contacts, Photos
-and videos, Audio, Files and docs, Calendar, Web browsing history, App
-interactions, Installed apps, Crash logs, Diagnostics, Other app performance
-data. IP addresses: §8 item 3.
+Approximate location covers the typed or picked cities listed in §2 (owner
+decision, §8); the app never reads device location and the Android manifest
+has no location permission.
+
+**Not collected:** Financial info, Health and fitness (pending §8 open item
+5), Precise location, Contacts, Photos and videos, Audio, Files and docs,
+Calendar, Web browsing history, App interactions, Installed apps, Crash logs,
+Diagnostics, Other app performance data. IP addresses: §8 open item 3.
 
 ## 5. Listing copy
 
@@ -331,7 +362,9 @@ calls it "Budgetrip by Tagalong" with short name "Budgetrip"
 | Privacy policy URL           | https://tagalong.averrow.com/privacy                                                                           | https://tagalong.averrow.com/privacy                                                        |
 | Terms (EULA)                 | https://tagalong.averrow.com/terms                                                                             | https://tagalong.averrow.com/terms                                                          |
 | Account deletion URL         | n/a (in-app)                                                                                                   | https://tagalong.averrow.com/delete-account                                                 |
-| Contact email                | {{CONTACT_EMAIL}}                                                                                              | {{CONTACT_EMAIL}}                                                                           |
+| Contact email                | support@averrow.com                                                                                            | support@averrow.com                                                                         |
+| Devices                      | iPhone only (`TARGETED_DEVICE_FAMILY = 1` in `apps/web/ios/App/App.xcodeproj/project.pbxproj`)                 | Phones                                                                                      |
+| Screenshots                  | 6.9" iPhone display only; no iPad screenshots (the app does not run as an iPad app)                            | Phone screenshots                                                                           |
 
 **Full description** (both stores):
 
@@ -420,7 +453,7 @@ Every message and profile has Report and Block. Blocking hides both people from 
 Account deletion
 Account (top navigation) → "Delete account" → type DELETE → "Delete my account" → confirm. This deletes the account and its data immediately and signs out everywhere. Also described at https://tagalong.averrow.com/delete-account.
 
-Contact: {{CONTACT_EMAIL}}
+Contact: support@averrow.com
 ```
 
 The steps match `apps/web/src/App.tsx` (sign-in buttons, Account link),
@@ -433,29 +466,37 @@ Before submitting: Sign in with Apple must be configured (`docs/SETUP.md`
 §1g), or the reviewer's sign-in fails with "misconfigured". Without Duffel
 and Booking.com keys, flights and hotels show as labelled estimates
 (`docs/SETUP.md` §1b). A reviewer alone sees an empty group chat; see §8
-item 7.
+open item 7.
 
 ## 8. Owner decisions
 
-These are open. The code's current behaviour is stated; the answer is yours.
+### Decided
 
-1. **Contact and controller.** Fill `{{CONTACT_EMAIL}}` (support and privacy
-   contact, used in both stores and on /support and /privacy) and
-   `{{CONTROLLER}}` (the legal entity responsible for the data, and its
-   country), which the privacy policy and Play's developer details need.
-2. **Is a typed city "approximate location"?** The app never reads device
-   location. It does store cities the user types or picks: the trip origin
-   (label plus the city centre's coordinates from Google Places, stored to 4
-   decimal places, in `trip_requests`), the Tagalong city shown to others
-   (`users.tagalong_city`), and `users.home_city` (accepted by the API but
-   not sent by the current app). Google Play's definition of approximate
-   location mentions "the city a user is in"; Apple's coarse location is about
-   the user's or device's location. If yes: add Coarse Location (Apple, §2
-   and §3) and Approximate location (Play, §4), purpose App functionality,
-   linked.
+- **Contact:** support@averrow.com, for support and privacy, in both stores,
+  the review notes (§7) and on /support and /privacy.
+- **Devices:** iPhone only. `TARGETED_DEVICE_FAMILY = 1`
+  (`apps/web/ios/App/App.xcodeproj/project.pbxproj`), so App Store Connect
+  needs 6.9" iPhone screenshots and no iPad ones (§5).
+- **Typed cities are approximate location.** A city the user types or picks
+  and that is stored on the account is declared as Coarse Location (Apple)
+  and Approximate location (Play): collected, linked to the user, for app
+  functionality, not tracking (§2, §3, §4). The app never reads device
+  location.
+
+### Open
+
+Items 1 and 2 must be done before submitting. Items 3 to 9 are also still
+open: the code's current behaviour is stated, and the answer is yours.
+
+1. **Controller.** Fill `{{CONTROLLER}}` (the legal entity responsible for
+   the data, and its country), which the privacy policy and Play's developer
+   details need.
+2. **Legal review of /privacy and /terms** before submitting to either store,
+   including the readings this file relies on (Play's service-provider
+   exemption in §4, the retention choices below).
 3. **Declare security-only IP use?** IP addresses are stored only as
-   rate-limit keys, for abuse prevention, kept up to 24 hours, not linked to
-   an account (§1e). Cloudflare's own logs also see them. Decide whether the
+   rate-limit keys, for abuse prevention, kept at most 24 hours (in practice
+   at most 7), not linked to an account (§1e). Cloudflare's own logs also see them. Decide whether the
    privacy labels declare this (and under which type), or whether the privacy
    policy alone covers it.
 4. **Retention of tombstones, reports and suspended identities.** Currently

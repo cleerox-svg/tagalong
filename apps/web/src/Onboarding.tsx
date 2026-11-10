@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, type Me } from "./api.js";
+import { AgreeNote } from "./Legal.js";
 
 export const COMMON_CURRENCIES = [
 	"CAD",
@@ -57,6 +58,7 @@ export function Onboarding({ me, onDone }: { me: Me; onDone: () => void }) {
 					</select>
 				</label>
 				{error && <p className="error">{error}</p>}
+				<AgreeNote />
 				<button className="primary" disabled={busy}>
 					Continue
 				</button>

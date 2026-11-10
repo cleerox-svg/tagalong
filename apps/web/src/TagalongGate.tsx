@@ -6,6 +6,7 @@ import {
 } from "@tagalong/shared";
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { api, ApiError, type Me } from "./api.js";
+import { PageLink } from "./Legal.js";
 
 /** The signed-in, age-confirmed user, and a way to re-read /me after a change. */
 export interface MeCtx {
@@ -39,6 +40,7 @@ export function TagalongGate({
 		me?.home_city && isCityLabel(me.home_city.trim()) ? me.home_city.trim() : "",
 	);
 	const [confirm, setConfirm] = useState(false);
+	const [agree, setAgree] = useState(false);
 	const [errors, setErrors] = useState<{ name?: string; city?: string; form?: string }>({});
 	const [busy, setBusy] = useState(false);
 	const ids = useId();
@@ -49,15 +51,16 @@ export function TagalongGate({
 	const submit = async (e: React.FormEvent) => {
 		e.preventDefault();
 		const parsed = TagalongOptInSchema.safeParse({ confirm, name, city });
-		if (!parsed.success) {
+		if (!parsed.success || !agree) {
 			const next: typeof errors = {};
-			for (const issue of parsed.error.issues) {
+			if (!agree) next.form = "Tick both boxes to join.";
+			for (const issue of parsed.success ? [] : parsed.error.issues) {
 				const field = issue.path[0];
 				if (field === "name")
 					next.name ??= `Use 1–${TAGALONG_NAME_MAX} characters, with no links or e-mail addresses.`;
 				else if (field === "city")
 					next.city ??= "Just a city name, like “Toronto” — no numbers, street or postcode.";
-				else if (field === "confirm") next.form ??= "Tick the box to confirm.";
+				else if (field === "confirm") next.form ??= "Tick both boxes to join.";
 			}
 			setErrors(next);
 			return;
@@ -93,6 +96,11 @@ export function TagalongGate({
 				</li>
 				<li>Tagalong is for adults only. You confirmed you're 18 or older when you signed up.</li>
 				<li>You can block or report anyone, and leave Tagalong at any time.</li>
+				<li>
+					<strong>Zero tolerance</strong> for objectionable content and abusive users. Moderators
+					review every report and can remove messages and suspend accounts. Read the{" "}
+					<PageLink to="/terms">Terms of Use</PageLink>.
+				</li>
 			</ul>
 			<form onSubmit={submit} noValidate>
 				<label>
@@ -135,6 +143,11 @@ export function TagalongGate({
 				<label className="check">
 					<input type="checkbox" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} />
 					I understand that this name and city will be shown to other Tagalong members.
+				</label>
+				<label className="check">
+					<input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />I
+					agree to the Terms of Use, including zero tolerance for objectionable content and abusive
+					users.
 				</label>
 				{errors.form && (
 					<p className="error" role="alert">
