@@ -198,6 +198,14 @@ input::placeholder,
 textarea::placeholder {
 	color: #8a95ad;
 	opacity: 1;
+	/* Lighter and slanted so an example never reads as an entered value. */
+	font-weight: 400;
+	font-style: italic;
+}
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+	border-color: var(--error);
 }
 textarea {
 	resize: vertical;
@@ -301,7 +309,7 @@ legend {
 	border-radius: 999px;
 	padding: 6px 12px;
 	margin: 0;
-	min-height: 40px;
+	min-height: 44px;
 	font-size: 0.875rem;
 	font-weight: 500;
 	color: var(--ink);
@@ -390,9 +398,15 @@ legend {
 	border-radius: 14px;
 }
 .who-row input[inputmode="decimal"] {
-	border-color: var(--brand);
+	border-color: var(--field-line);
 	font-size: 1.125rem;
 	font-weight: 700;
+}
+.who-row input[inputmode="decimal"]:focus-visible {
+	border-color: var(--brand);
+}
+.who-row input[inputmode="decimal"][aria-invalid="true"] {
+	border-color: var(--error);
 }
 .origin-row > input {
 	flex: 1 1 200px;
@@ -603,6 +617,14 @@ legend {
 	cursor: pointer;
 	padding: 4px 0;
 }
+/* 44px tap targets at phone width, without changing the text. */
+.item-meta a,
+.item summary,
+.tap-link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+}
 .item details p {
 	margin: 4px 0 0;
 }
@@ -655,12 +677,17 @@ legend {
 	text-transform: uppercase;
 	letter-spacing: 0.08em;
 }
-/* A provider price: lime dot and the source name. */
+/* A provider price: the source name; live sources (see SOURCES in PlanView) add the lime dot. */
 .badge.src {
 	background: var(--src-bg);
 	color: var(--brand);
 	padding: 0;
 	font-weight: 600;
+}
+/* A moderation flag (deleted, suspended): error red, never the amber "estimate" look. */
+.badge.flag {
+	border: 1px solid var(--error);
+	color: var(--error);
 }
 .live-dot {
 	display: inline-block;
@@ -1226,8 +1253,6 @@ button.google-signin:hover:not(:disabled):not([aria-disabled="true"]) {
 	justify-content: center;
 	width: 24px;
 	height: 24px;
-	border-radius: 4px;
-	background: #ffffff;
 }
 .google-logo svg {
 	display: block;

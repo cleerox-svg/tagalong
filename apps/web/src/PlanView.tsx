@@ -24,13 +24,24 @@ const LABELS: Record<PlanPackage["label"], string> = {
 
 const money = (amount_minor: number, currency: string) => formatMoney({ amount_minor, currency });
 
-const SOURCES: Record<string, string> = {
-	ticketmaster: "Ticketmaster",
-	eventbrite: "Eventbrite",
-	url: "Event page",
-	duffel: "Duffel · live",
-	"booking.com": "Booking.com · live",
+/**
+ * Where a provider price came from. `live` marks the sources that quote a
+ * bookable price at fetch time (flights, hotels); only those get the lime
+ * dot and the "· live" label. Event listings are provider prices, not live.
+ */
+const SOURCES: Record<string, { name: string; live: boolean }> = {
+	ticketmaster: { name: "Ticketmaster", live: false },
+	eventbrite: { name: "Eventbrite", live: false },
+	url: { name: "Event page", live: false },
+	duffel: { name: "Duffel", live: true },
+	"booking.com": { name: "Booking.com", live: true },
 };
+
+function sourceLabel(provider: string): string {
+	const s = SOURCES[provider];
+	if (!s) return provider;
+	return s.live ? `${s.name} · live` : s.name;
+}
 
 function linkText(i: PlanItem): string {
 	if (i.kind === "ticket") return "Tickets";
@@ -59,7 +70,7 @@ function LiveLine({ live }: { live: NonNullable<Plan["result"]>["live"] }) {
 const when = (iso: string) =>
 	new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-function Item({ i, home }: { i: PlanItem; home: string }) {
+export function Item({ i, home }: { i: PlanItem; home: string }) {
 	return (
 		<li className="item">
 			<div className="item-head">
@@ -74,8 +85,8 @@ function Item({ i, home }: { i: PlanItem; home: string }) {
 					<span className="badge est">estimate</span>
 				) : (
 					<span className="badge src">
-						<span className="live-dot" aria-hidden="true" />
-						{SOURCES[i.provider] ?? i.provider}
+						{SOURCES[i.provider]?.live && <span className="live-dot" aria-hidden="true" />}
+						{sourceLabel(i.provider)}
 					</span>
 				)}
 				<span className="muted">
@@ -338,7 +349,7 @@ export function PlanView(props: { id: string } | { token: string }) {
 			{shared && (
 				<p className="note banner">
 					A trip someone shared with you — read only.{" "}
-					<a href="/" onClick={linkTo("/")}>
+					<a className="tap-link" href="/" onClick={linkTo("/")}>
 						Plan your own
 					</a>
 				</p>
@@ -464,7 +475,7 @@ export function PlanView(props: { id: string } | { token: string }) {
 			</div>
 
 			<p>
-				<a href="/" onClick={linkTo("/")}>
+				<a className="tap-link" href="/" onClick={linkTo("/")}>
 					← Plan another trip
 				</a>
 			</p>

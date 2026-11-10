@@ -307,8 +307,9 @@ function SignIn({ onSignedIn }: { onSignedIn: () => Promise<void> }) {
 }
 
 /**
- * Google's standard four-colour "G" for the "Sign in with Google" button, on
- * the white tile Google's branding asks for; decorative (the text names it).
+ * Google's standard four-colour "G" for the "Sign in with Google" button,
+ * straight on the #131314 fill, per Google's dark-theme button; decorative
+ * (the text names it).
  */
 function GoogleLogo() {
 	return (
