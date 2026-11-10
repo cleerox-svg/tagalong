@@ -165,33 +165,35 @@ export function Planner({ me }: { me: Me }) {
 	const err = (k: string) => (errors[k] ? <span className="field-error">{errors[k]}</span> : null);
 
 	return (
-		<>
-			<section className="card">
+		<div className="planner wide">
+			<section className="card describe">
 				<h1>Plan a trip</h1>
-				<label>
-					Describe it in your own words
-					<textarea
-						rows={3}
-						maxLength={2000}
-						placeholder="I'm in Toronto, I want to see the Knicks at MSG in March, $1,200 CAD for two of us, we'd rather drive, we like food and nightlife."
-						value={text}
-						onChange={(e) => setText(e.target.value)}
-					/>
-				</label>
-				<button type="button" onClick={parse} disabled={parsing || text.trim().length < 3}>
-					{parsing ? "Reading…" : "Fill in the form for me"}
-				</button>
+				<div className="describe-row">
+					<label>
+						Describe it in your own words
+						<textarea
+							rows={3}
+							maxLength={2000}
+							placeholder="I'm in Toronto, I want to see the Knicks at MSG in March, $1,200 CAD for two of us, we'd rather drive, we like food and nightlife."
+							value={text}
+							onChange={(e) => setText(e.target.value)}
+						/>
+					</label>
+					<button type="button" onClick={parse} disabled={parsing || text.trim().length < 3}>
+						{parsing ? "Reading…" : "Fill in the form for me"}
+					</button>
+				</div>
 				{parseNote && <p className="note">{parseNote}</p>}
 			</section>
 
 			{browse && <Browse key={browse.key} start={browse.start} onPick={pick} />}
 
-			<form className="card" id="trip-details" onSubmit={submit} noValidate>
+			<form className="card trip-form" id="trip-details" onSubmit={submit} noValidate>
 				<h2>Trip details</h2>
 
 				<fieldset>
 					<legend>Where you're starting from</legend>
-					<div className="row">
+					<div className="row origin-row">
 						<input
 							aria-label="Starting city"
 							placeholder="City"
@@ -305,42 +307,44 @@ export function Planner({ me }: { me: Me }) {
 						</>
 					) : (
 						<>
-							<label>
-								Team, artist or event
-								<input
-									value={form.event_query}
-									onChange={(e) => set("event_query", e.target.value)}
-									placeholder="Knicks"
-								/>
-								{err("event_query")}
-							</label>
-							<label>
-								Event city (optional)
-								<input
-									value={form.event_city}
-									onChange={(e) => set("event_city", e.target.value)}
-									placeholder="New York"
-								/>
-							</label>
-							<div className="row">
+							<div className="event-fields">
 								<label>
-									From
+									Team, artist or event
 									<input
-										type="date"
-										value={form.date_from}
-										onChange={(e) => set("date_from", e.target.value)}
+										value={form.event_query}
+										onChange={(e) => set("event_query", e.target.value)}
+										placeholder="Knicks"
 									/>
-									{err("date_from")}
+									{err("event_query")}
 								</label>
 								<label>
-									To
+									Event city (optional)
 									<input
-										type="date"
-										value={form.date_to}
-										onChange={(e) => set("date_to", e.target.value)}
+										value={form.event_city}
+										onChange={(e) => set("event_city", e.target.value)}
+										placeholder="New York"
 									/>
-									{err("date_to")}
 								</label>
+								<div className="row">
+									<label>
+										From
+										<input
+											type="date"
+											value={form.date_from}
+											onChange={(e) => set("date_from", e.target.value)}
+										/>
+										{err("date_from")}
+									</label>
+									<label>
+										To
+										<input
+											type="date"
+											value={form.date_to}
+											onChange={(e) => set("date_to", e.target.value)}
+										/>
+										{err("date_to")}
+									</label>
+								</div>
 							</div>
 							<label>
 								Or paste the event's link (Eventbrite, Ticketmaster, a venue or festival page)
@@ -405,7 +409,7 @@ export function Planner({ me }: { me: Me }) {
 
 				<fieldset>
 					<legend>Who and how much</legend>
-					<div className="row">
+					<div className="row who-row">
 						<label>
 							People
 							<input
@@ -457,7 +461,7 @@ export function Planner({ me }: { me: Me }) {
 
 				<fieldset>
 					<legend>What you like</legend>
-					<div className="row">
+					<div className="row like-row">
 						<label>
 							Getting there
 							<select
@@ -541,11 +545,13 @@ export function Planner({ me }: { me: Me }) {
 					</label>
 				</fieldset>
 
-				{err("form")}
-				<button className="primary" disabled={submitting}>
-					{submitting ? "Starting…" : "Find packages"}
-				</button>
+				<div className="submit-row">
+					{err("form")}
+					<button className="primary" disabled={submitting}>
+						{submitting ? "Starting…" : "Find packages"}
+					</button>
+				</div>
 			</form>
-		</>
+		</div>
 	);
 }
