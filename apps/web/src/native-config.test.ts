@@ -57,7 +57,8 @@ function parsePlist(xml: string): PlistValue {
 			.replace(/&amp;/g, "&");
 	const textUntilClose = (tag: string): string => {
 		let out = "";
-		while (tokens[i] && !(tokens[i]?.close && tokens[i]?.tag === tag)) out += tokens[i++]?.text ?? "";
+		while (tokens[i] && !(tokens[i]?.close && tokens[i]?.tag === tag))
+			out += tokens[i++]?.text ?? "";
 		if (!tokens[i]) throw new Error(`unclosed <${tag}>`);
 		i++;
 		return unescape(out);
@@ -145,7 +146,9 @@ function pbxField(body: string, name: string): string | undefined {
 }
 
 function appTargetId(): string {
-	const m = /^\t\t([0-9A-F]{24}) \/\* App \*\/ = \{\n\t\t\tisa = PBXNativeTarget;/m.exec(pbxprojRaw);
+	const m = /^\t\t([0-9A-F]{24}) \/\* App \*\/ = \{\n\t\t\tisa = PBXNativeTarget;/m.exec(
+		pbxprojRaw,
+	);
 	if (!m?.[1]) throw new Error("App PBXNativeTarget not found");
 	return m[1];
 }
@@ -218,7 +221,8 @@ describe("versions", () => {
 	it("iOS MARKETING_VERSION equals Android versionName", () => {
 		const versionName = gradleValue("versionName");
 		expect(versionName).toMatch(/^\d+(\.\d+){0,2}$/);
-		for (const c of appTargetConfigs()) expect(c.settings.MARKETING_VERSION, c.name).toBe(versionName);
+		for (const c of appTargetConfigs())
+			expect(c.settings.MARKETING_VERSION, c.name).toBe(versionName);
 	});
 
 	it("iOS CURRENT_PROJECT_VERSION equals Android versionCode, an integer", () => {
@@ -241,9 +245,10 @@ describe("PrivacyInfo.xcprivacy", () => {
 	});
 
 	it("is a file reference built into the App target's Resources phase", () => {
-		const fileRef = /^\t\t([0-9A-F]{24}) \/\* PrivacyInfo\.xcprivacy \*\/ = \{isa = PBXFileReference;[^\n]*\bpath = PrivacyInfo\.xcprivacy;/m.exec(
-			pbxprojRaw,
-		)?.[1];
+		const fileRef =
+			/^\t\t([0-9A-F]{24}) \/\* PrivacyInfo\.xcprivacy \*\/ = \{isa = PBXFileReference;[^\n]*\bpath = PrivacyInfo\.xcprivacy;/m.exec(
+				pbxprojRaw,
+			)?.[1];
 		expect(fileRef).toBeDefined();
 		const buildFile = new RegExp(
 			`^\\t\\t([0-9A-F]{24}) /\\* PrivacyInfo\\.xcprivacy in Resources \\*/ = \\{isa = PBXBuildFile; fileRef = ${fileRef} `,
@@ -343,7 +348,9 @@ describe("AndroidManifest.xml", () => {
 		];
 		const verified = filters.filter((f) => /android:autoVerify="true"/.test(f[0]));
 		expect(verified).toHaveLength(1);
-		const hosts = [...(verified[0]?.[1] ?? "").matchAll(/android:host="([^"]+)"/g)].map((m) => m[1]);
+		const hosts = [...(verified[0]?.[1] ?? "").matchAll(/android:host="([^"]+)"/g)].map(
+			(m) => m[1],
+		);
 		expect(hosts).toEqual(domains);
 	});
 });
@@ -378,7 +385,9 @@ describe("App Store icon", () => {
 				import.meta.url,
 			),
 		);
-		expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+		expect(png.subarray(0, 8)).toEqual(
+			Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+		);
 		// The first chunk is IHDR: width, height, bit depth, colour type.
 		expect(png.toString("latin1", 12, 16)).toBe("IHDR");
 		expect(png.readUInt32BE(16)).toBe(1024);
@@ -386,7 +395,7 @@ describe("App Store icon", () => {
 		expect(png[25]).toBe(2); // colour type 2: truecolour, no alpha
 
 		const chunks: string[] = [];
-		for (let off = 8; off + 8 <= png.length; ) {
+		for (let off = 8; off + 8 <= png.length;) {
 			const len = png.readUInt32BE(off);
 			const type = png.toString("latin1", off + 4, off + 8);
 			chunks.push(type);

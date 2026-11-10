@@ -206,4 +206,84 @@ describe("scheduled()", () => {
 		expect(JSON.stringify(errors)).not.toContain(ip);
 		expect(logs.some((a) => a[0] === "saved-trip price check")).toBe(true);
 	});
+
+	/** Every console channel, captured, so no IP can slip out through any of them. */
+	function captureConsole() {
+		const out: unknown[][] = [];
+		for (const level of ["log", "info", "warn", "error", "debug"] as const)
+			vi.spyOn(console, level).mockImplementation((...args) => {
+				out.push([level, ...args]);
+			});
+		return out;
+	}
+
+	it("a successful prune logs only a row count, never an IP", async () => {
+		mockFetch(() => undefined);
+		const ip = "198.51.100.231";
+		await insert(`ip:shared:${ip}`, NOW - 2 * HOUR);
+		await insert(`ip:signin:google:${ip}`, NOW - 3 * HOUR);
+		await insert(`shared:${ip}`, NOW - 2 * HOUR);
+		const out = captureConsole();
+		await runCron();
+		expect(await exists(`ip:shared:${ip}`, NOW - 2 * HOUR)).toBe(false);
+		const prune = out.filter((a) => a[1] === "rate-limit prune");
+		expect(prune).toHaveLength(1);
+		expect(prune[0]?.[0]).toBe("log");
+		expect(Object.keys(prune[0]?.[2] as object)).toEqual(["deleted"]);
+		expect((prune[0]?.[2] as { deleted: number }).deleted).toBeGreaterThanOrEqual(3);
+		expect(JSON.stringify(out)).not.toContain(ip);
+		expect(out.some((a) => a[1] === "saved-trip price check")).toBe(true);
+	});
+
+	it("a prune whose statement rejects (not throws) still lets the price check run, with no IP logged", async () => {
+		mockFetch(() => undefined);
+		const ip = "198.51.100.232";
+		const out = captureConsole();
+		// prepare() succeeds; the D1 run fails asynchronously with an IP in its message.
+		const db = new Proxy(env.DB, {
+			get(target, prop) {
+				if (prop === "prepare")
+					return (sql: string) => {
+						if (!sql.includes("DELETE FROM rate_limits")) return target.prepare(sql);
+						const failing = {
+							bind: () => failing,
+							run: () => Promise.reject(new Error(`D1_ERROR on ip:shared:${ip}`)),
+						};
+						return failing;
+					};
+				const v = Reflect.get(target, prop, target);
+				return typeof v === "function" ? v.bind(target) : v;
+			},
+		});
+		await runCron({ ...env, DB: db });
+		expect(out.filter((a) => a[0] === "error")).toEqual([["error", "rate-limit prune failed"]]);
+		expect(out.some((a) => a[0] === "log" && a[1] === "rate-limit prune")).toBe(false);
+		expect(out.some((a) => a[0] === "log" && a[1] === "saved-trip price check")).toBe(true);
+		expect(JSON.stringify(out, (_k, v) => (v instanceof Error ? v.message : v))).not.toContain(ip);
+	});
+
+	it("a failing saved-trip check does not stop the prune", async () => {
+		mockFetch(() => undefined);
+		const old = `ip:shared:${uniq("203.0.113.77")}`;
+		await insert(old, NOW - 2 * HOUR);
+		const out = captureConsole();
+		// Every read the price check makes fails; the prune's DELETE goes through.
+		const db = new Proxy(env.DB, {
+			get(target, prop) {
+				if (prop === "prepare")
+					return (sql: string) => {
+						if (sql.includes("DELETE FROM rate_limits")) return target.prepare(sql);
+						throw new Error("saved trips unavailable");
+					};
+				const v = Reflect.get(target, prop, target);
+				return typeof v === "function" ? v.bind(target) : v;
+			},
+		});
+		await runCron({ ...env, DB: db });
+		expect(await exists(old, NOW - 2 * HOUR)).toBe(false);
+		expect(out.some((a) => a[0] === "error" && a[1] === "saved-trip price check failed")).toBe(
+			true,
+		);
+		expect(out.some((a) => a[0] === "log" && a[1] === "rate-limit prune")).toBe(true);
+	});
 });
