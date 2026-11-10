@@ -6,7 +6,8 @@ import { APP_CALLBACK_PATH, AppCallback } from "./AppCallback.js";
 import { Connections, Profile } from "./Connections.js";
 import { Dm } from "./Dm.js";
 import { Group } from "./Group.js";
-import { AgreeNote, isLegalPath, LegalLinks, legalPage } from "./Legal.js";
+import { AgreeNote, LegalLinks, legalPage } from "./Legal.js";
+import { shouldLoadSession } from "./legal-path.js";
 import { Moderation } from "./Moderation.js";
 import {
 	attachPushListeners,
@@ -70,7 +71,7 @@ export function App() {
 	// session is first read when the person moves on to any other page.
 	const loadStarted = useRef(false);
 	useEffect(() => {
-		if (loadStarted.current || isLegalPath(path)) return;
+		if (!shouldLoadSession(path, loadStarted.current)) return;
 		loadStarted.current = true;
 		void load();
 	}, [path, load]);
@@ -245,7 +246,7 @@ export function App() {
 						Budgetrip links out to the real sellers and never takes payment. Numbers marked{" "}
 						<em>estimate</em> are rules of thumb, not quotes — check the price when you book.
 					</p>
-					<LegalLinks />
+					<LegalLinks path={path} />
 				</footer>
 			</div>
 		</MeContext.Provider>

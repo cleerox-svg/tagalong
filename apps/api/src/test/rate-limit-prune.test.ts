@@ -9,6 +9,7 @@ import worker from "../index.js";
 import {
 	IP_MAX_WINDOW_SECONDS,
 	MAX_WINDOW_SECONDS,
+	PRUNE_LIMITS,
 	pruneRateLimits,
 	rateLimit,
 	rateLimitByIp,
@@ -128,6 +129,76 @@ describe("pruneRateLimits", () => {
 			.bind(prefix.length, prefix)
 			.first<{ c: number }>();
 		expect(left?.c).toBe(0);
+	});
+
+	it("prunes every expired IP row first, even past the general cap", async () => {
+		// Lowered caps: the general sweep may delete at most 2 x 10 = 20 rows,
+		// and more than that many expired non-IP rows are waiting.
+		const limits = { ...PRUNE_LIMITS, batchSize: 10, generalMaxBatches: 2 };
+		const tag = uniq("backlog");
+		const stmt = env.DB.prepare(
+			"INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)",
+		);
+		await env.DB.batch(
+			Array.from({ length: 60 }, (_, i) => stmt.bind(`tg:join:${tag}:${i}`, NOW - 2 * DAY)),
+		);
+		// More IP rows than one batch, under every IP prefix.
+		const ipKeys = [
+			...Array.from({ length: 25 }, (_, i) => `ip:shared:${tag}-${i}`),
+			...Array.from({ length: 12 }, (_, i) => `ip:signin:google:${tag}-${i}`),
+			`shared:${tag}`,
+			`native-exchange:${tag}`,
+			`signin:google:${tag}`,
+		];
+		await env.DB.batch(ipKeys.map((k) => stmt.bind(k, NOW - 2 * HOUR)));
+		const live = `ip:shared:${tag}-live`;
+		await insert(live, NOW - 60);
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+		await pruneRateLimits(env.DB, NOW_MS, limits);
+
+		for (const k of ipKeys) expect(await exists(k, NOW - 2 * HOUR)).toBe(false);
+		expect(await exists(live, NOW - 60)).toBe(true);
+		const left = await env.DB.prepare(
+			"SELECT COUNT(*) AS c FROM rate_limits WHERE key >= ? AND key < ?",
+		)
+			.bind(`tg:join:${tag}:`, `tg:join:${tag};`)
+			.first<{ c: number }>();
+		// The general cap stopped the sweep; the rest waits for the next run.
+		expect(left?.c).toBeGreaterThan(0);
+	});
+
+	it("logs a capped prune with counts only, never an IP", async () => {
+		const limits = { ...PRUNE_LIMITS, batchSize: 2, ipMaxBatches: 1, generalMaxBatches: 1 };
+		const ip = "203.0.113.250";
+		for (const scope of ["shared", "signin:google", "native-exchange", "plan"])
+			await insert(`ip:${scope}:${ip}`, NOW - 2 * HOUR);
+		const tag = uniq("capped");
+		for (let i = 0; i < 4; i++) await insert(`tg:msg:${tag}:${i}`, NOW - 2 * DAY);
+		const out: unknown[][] = [];
+		for (const level of ["log", "info", "warn", "error", "debug"] as const)
+			vi.spyOn(console, level).mockImplementation((...args) => {
+				out.push([level, ...args]);
+			});
+
+		const deleted = await pruneRateLimits(env.DB, NOW_MS, limits);
+
+		const capped = out.filter((a) => a[1] === "rate-limit prune capped");
+		expect(capped).toHaveLength(1);
+		expect(capped[0]?.[0]).toBe("warn");
+		const counts = capped[0]?.[2] as Record<string, unknown>;
+		expect(Object.keys(counts).sort()).toEqual(["ipDeleted", "otherDeleted"]);
+		for (const v of Object.values(counts)) expect(typeof v).toBe("number");
+		expect(counts.ipDeleted).toBe(2);
+		expect(deleted).toBe((counts.ipDeleted as number) + (counts.otherDeleted as number));
+		expect(JSON.stringify(out)).not.toContain(ip);
+	});
+
+	it("does not log a cap when everything fits", async () => {
+		await insert(`ip:shared:${uniq("192.0.2.9")}`, NOW - 2 * HOUR);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		await pruneRateLimits(env.DB, NOW_MS);
+		expect(warn).not.toHaveBeenCalled();
 	});
 
 	it("still enforces the limit inside a live window after a prune", async () => {

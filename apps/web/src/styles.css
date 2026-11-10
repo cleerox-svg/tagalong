@@ -384,10 +384,6 @@ legend {
 .ai-note {
 	margin: 12px 0 0;
 }
-.ai-note a {
-	display: inline-block;
-	padding: 4px 0;
-}
 .trip-form > fieldset + fieldset {
 	padding-top: 16px;
 	border-top: 1px solid var(--line-soft);
@@ -1385,10 +1381,17 @@ button.google-signin:hover:not(:disabled):not([aria-disabled="true"]) {
 .agree-note {
 	margin: 12px 0 0;
 }
-.agree-note a {
+.account-legal {
+	margin: 12px 0 0;
+}
+/* Links in these short notes get a taller tap target without changing the line height. */
+.agree-note a,
+.ai-note a,
+.account-legal a,
+.check-link a {
 	display: inline-block;
 	padding: 4px 0;
 }
-.account-legal {
-	margin: 12px 0 0;
+.check-link {
+	margin: -4px 0 12px;
 }

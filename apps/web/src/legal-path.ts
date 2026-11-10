@@ -17,7 +17,9 @@ export type LegalPath = keyof typeof LEGAL_PAGES;
  * "/toString" or "/__proto__" never match.
  */
 export function canonicalLegalPath(path: string): LegalPath | null {
-	const trimmed = path.replace(/\/+$/, "");
+	let end = path.length;
+	while (end > 0 && path[end - 1] === "/") end--;
+	const trimmed = path.slice(0, end);
 	return Object.hasOwn(LEGAL_PAGES, trimmed) ? (trimmed as LegalPath) : null;
 }
 

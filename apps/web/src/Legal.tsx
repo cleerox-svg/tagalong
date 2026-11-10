@@ -8,7 +8,10 @@
  */
 import { useEffect, type ReactNode } from "react";
 import { DELETE_CONFIRM_WORD } from "./account.js";
+import { canonicalLegalPath, LEGAL_PAGES, type LegalPath } from "./legal-path.js";
 import { linkTo } from "./router.js";
+
+export { isLegalPath, LEGAL_PAGES, type LegalPath } from "./legal-path.js";
 
 export const SUPPORT_EMAIL = "support@averrow.com";
 
@@ -16,22 +19,11 @@ export const SUPPORT_EMAIL = "support@averrow.com";
 const CONTROLLER = "{{CONTROLLER}}";
 const EFFECTIVE_DATE = "{{EFFECTIVE_DATE}}";
 
-export const LEGAL_PAGES = {
-	"/privacy": "Privacy Policy",
-	"/terms": "Terms of Use",
-	"/support": "Support",
-	"/delete-account": "Delete your account",
-} as const;
-export type LegalPath = keyof typeof LEGAL_PAGES;
-
-export function isLegalPath(path: string): path is LegalPath {
-	return Object.hasOwn(LEGAL_PAGES, path);
-}
-
-/** The page for a legal path, or null. */
+/** The page for a legal path (trailing slashes ignored), or null. */
 export function legalPage(path: string): ReactNode {
-	if (!isLegalPath(path)) return null;
-	switch (path) {
+	const page = canonicalLegalPath(path);
+	if (!page) return null;
+	switch (page) {
 		case "/privacy":
 			return <Privacy />;
 		case "/terms":
@@ -78,13 +70,29 @@ function LegalShell({ path, children }: { path: LegalPath; children: ReactNode }
 	);
 }
 
+/** An in-app link marked as the current page when `current` is set. */
+function NavLink({ to, current, children }: { to: string; current: boolean; children: ReactNode }) {
+	return (
+		<a href={to} onClick={linkTo(to)} aria-current={current ? "page" : undefined}>
+			{children}
+		</a>
+	);
+}
+
 /** Privacy, Terms and Support: on every screen, 44px tap targets. */
-export function LegalLinks() {
+export function LegalLinks({ path }: { path: string }) {
+	const here = canonicalLegalPath(path);
 	return (
 		<nav aria-label="Legal and support" className="legal-links">
-			<PageLink to="/privacy">Privacy</PageLink>
-			<PageLink to="/terms">Terms</PageLink>
-			<PageLink to="/support">Support</PageLink>
+			<NavLink to="/privacy" current={here === "/privacy"}>
+				Privacy
+			</NavLink>
+			<NavLink to="/terms" current={here === "/terms"}>
+				Terms
+			</NavLink>
+			<NavLink to="/support" current={here === "/support"}>
+				Support
+			</NavLink>
 		</nav>
 	);
 }
@@ -291,6 +299,10 @@ function Privacy() {
 					moderation, until you delete your account.
 				</li>
 				<li>
+					Deleted data and pruned records can remain in the point-in-time backups kept by our
+					database provider (Cloudflare D1) for up to 30 days before they are gone.
+				</li>
+				<li>
 					Some things are kept after you delete your account. See{" "}
 					<PageLink to="/delete-account">Delete your account</PageLink> for the full list.
 				</li>
@@ -353,8 +365,14 @@ function Terms() {
 			<h2>Budgetrip links out; it doesn't sell</h2>
 			<p>
 				Budgetrip helps you plan. It does not sell tickets, flights, hotels or anything else, takes
-				no payment and has no in-app purchases. Each item links to the seller's own website, where
-				you book. Any booking is between you and that seller, under their terms and prices.
+				no payment and has no in-app purchases. Bookable items link out to the seller's site, or for
+				flights to a flight search, where you book. Any booking is between you and that seller,
+				under their terms and prices.
+			</p>
+			<p>
+				Some links, such as Booking.com, are affiliate links: if you book, the seller may pay us a
+				commission. It costs you nothing extra and never changes which packages we show or their
+				order.
 			</p>
 
 			<h2>Prices</h2>
@@ -477,8 +495,8 @@ function Support() {
 			<h2>Common questions</h2>
 			<h3>Can I buy tickets or book through Budgetrip?</h3>
 			<p>
-				No. Budgetrip doesn't sell anything or take payment. Each item links to the seller, where
-				you book.
+				No. Budgetrip doesn't sell anything or take payment. Tickets and hotels link to the seller,
+				and flights to a flight search, where you book.
 			</p>
 			<h3>Why is the price different on the seller's site?</h3>
 			<p>
@@ -523,8 +541,9 @@ function DeleteAccountInfo() {
 	return (
 		<LegalShell path="/delete-account">
 			<p>
-				You can delete your Budgetrip account, and the data under it, yourself at any time. It takes
-				effect straight away, signs you out on every device, and can't be undone.
+				You can delete your Budgetrip account, and the data under it, yourself at any time. It is
+				removed from the app and signs you out on every device straight away, and can't be undone.
+				Copies can remain in our database provider's backups for up to 30 days (see below).
 			</p>
 
 			<h2>In the app or on the web</h2>
@@ -588,6 +607,10 @@ function DeleteAccountInfo() {
 				<li>
 					IP records for abuse prevention expire within 24 hours, and our host's request logs follow
 					its own retention period.
+				</li>
+				<li>
+					Deleted data and pruned records can remain in the point-in-time backups kept by our
+					database provider (Cloudflare D1) for up to 30 days before they are gone.
 				</li>
 			</ul>
 			<p>

@@ -181,19 +181,15 @@ export function Planner({ me }: { me: Me }) {
 							onChange={(e) => setText(e.target.value)}
 						/>
 					</label>
-					<button
-						type="button"
-						onClick={parse}
-						disabled={parsing || text.trim().length < 3}
-						aria-describedby="ai-note"
-					>
+					<button type="button" onClick={parse} disabled={parsing || text.trim().length < 3}>
 						{parsing ? "Reading…" : "Fill in the form for me"}
 					</button>
 				</div>
 				{/* App Store 5.1.2: say who gets the text before it is sent. Only api.parse sends it. */}
 				<p className="note ai-note" id="ai-note">
 					To fill in the form, what you type here is sent to Anthropic's Claude AI, with today's
-					date. It only reads your words into the form below; it never finds, sets or ranks prices.
+					date. It only reads your words into the form below, including your budget, which you
+					check. It never finds, sets or estimates prices, and it doesn't choose or rank packages.
 					Don't include anything private. <PageLink to="/privacy">Privacy Policy</PageLink>
 				</p>
 				{parseNote && <p className="note">{parseNote}</p>}
