@@ -918,15 +918,21 @@ describe("cheapest: asOf with FX", () => {
 		expect(c!.asOf).toBe("2026-11-06T15:30:00.000Z");
 	});
 
-	it("result_json with no fx key, or not JSON at all, uses item times only", async () => {
+	it("result_json with no fx key uses item times only; not JSON at all is null", async () => {
 		const { fx: _drop, ...noFx } = JSON.parse(planResult([])) as Record<string, unknown>;
-		for (const resultJson of [JSON.stringify(noFx), "{}", "not json"]) {
+		for (const resultJson of [JSON.stringify(noFx), "{}"]) {
 			const c = await cheapestOf({
 				resultJson,
 				packages: [{ rank: 1, total: 5_000, items: ITEMS }],
 			});
 			expect(c!.asOf).toBe("2026-11-06T15:30:00.000Z");
 		}
+		expect(
+			await cheapestOf({
+				resultJson: "not json",
+				packages: [{ rank: 1, total: 5_000, items: ITEMS }],
+			}),
+		).toBeNull();
 	});
 
 	it("estimates.as_of and prices_checked_at are never used as the price date", async () => {

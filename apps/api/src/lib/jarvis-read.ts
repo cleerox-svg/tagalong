@@ -118,8 +118,40 @@ interface CheapestRow {
 	fetched_at: string | null;
 	/** Distinct currencies across all of the plan's packages. */
 	currencies: number | null;
-	/** Oldest exchange-rate date the plan converted with (result_json.fx[].as_of), or null. */
-	fx_as_of: unknown;
+	/** The plan's stored result_json (its `fx` list dates the exchange rates). */
+	result_json: unknown;
+}
+
+/**
+ * Oldest exchange-rate date (ms, midnight UTC) in a plan's result_json.fx, or
+ * undefined when the plan converted nothing (no `fx` key, an empty list, or
+ * only the identity rate's empty `as_of`, which means today). "invalid" when
+ * result_json is not a JSON object, `fx` is not an array, or any non-empty
+ * `as_of` is not a real YYYY-MM-DD date: better no price than a wrong date.
+ */
+function oldestFxDate(resultJson: unknown): number | undefined | "invalid" {
+	if (resultJson === null || resultJson === undefined) return undefined;
+	if (typeof resultJson !== "string") return "invalid";
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(resultJson);
+	} catch {
+		return "invalid";
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return "invalid";
+	if (!("fx" in parsed)) return undefined;
+	const fx = (parsed as { fx: unknown }).fx;
+	if (!Array.isArray(fx)) return "invalid";
+	let oldest: number | undefined;
+	for (const entry of fx) {
+		if (typeof entry !== "object" || entry === null) return "invalid";
+		const asOf = (entry as { as_of?: unknown }).as_of;
+		if (asOf === "") continue;
+		if (typeof asOf !== "string" || !isRealDate(asOf)) return "invalid";
+		const t = Date.parse(`${asOf}T00:00:00Z`);
+		if (oldest === undefined || t < oldest) oldest = t;
+	}
+	return oldest;
 }
 
 /**
@@ -129,7 +161,9 @@ interface CheapestRow {
  * is outside the contract (better to show no price than a wrong one).
  *
  * `asOf` is the oldest of the package items' fetch times and the date of the
- * oldest exchange rate the plan converted with.
+ * oldest exchange rate the plan converted with. Null too when the plan's
+ * result_json is not valid JSON, its `fx` is not a list, or any stored rate
+ * date is not a real YYYY-MM-DD date.
  */
 function toCheapest(rows: CheapestRow[]): JarvisCheapest | null {
 	const first = rows[0];
@@ -156,13 +190,9 @@ function toCheapest(rows: CheapestRow[]): JarvisCheapest | null {
 		if (r.is_estimate === 1) isEstimate = true;
 	}
 	if (oldest === null) return null;
-	const fx = first.fx_as_of;
-	if (fx !== null && fx !== undefined) {
-		if (typeof fx !== "string") return null;
-		const t = Date.parse(DATE_RE.test(fx) ? `${fx}T00:00:00Z` : fx);
-		if (Number.isNaN(t)) return null;
-		if (t < oldest) oldest = t;
-	}
+	const fx = oldestFxDate(first.result_json);
+	if (fx === "invalid") return null;
+	if (fx !== undefined && fx < oldest) oldest = fx;
 	return { amountMinor: amount, currency, isEstimate, asOf: new Date(oldest).toISOString() };
 }
 
@@ -227,10 +257,7 @@ export async function readUpcomingTripsForJarvis(
 		const stmt = env.DB.prepare(
 			`SELECT pk.total_minor, pk.currency, pi.is_estimate, pi.fetched_at,
 			   (SELECT COUNT(DISTINCT currency) FROM packages WHERE plan_id = ?) AS currencies,
-			   (SELECT MIN(NULLIF(json_extract(f.value, '$.as_of'), ''))
-			      FROM plans pl,
-			           json_each(CASE WHEN json_valid(pl.result_json) THEN pl.result_json ELSE '{}' END, '$.fx') f
-			      WHERE pl.id = ?) AS fx_as_of
+			   (SELECT result_json FROM plans WHERE id = ?) AS result_json
 			 FROM packages pk
 			 LEFT JOIN package_items pi ON pi.package_id = pk.id
 			 WHERE pk.id = (SELECT id FROM packages WHERE plan_id = ? ORDER BY total_minor, rank LIMIT 1)`,

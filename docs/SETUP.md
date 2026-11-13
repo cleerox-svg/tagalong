@@ -474,7 +474,9 @@ which saved trips are coming up. It is **read-only**: every statement is a
   fetch times and the date of the oldest exchange rate the plan converted
   with), or `null` when the plan isn't finished, has no package, or its
   packages are not all in one currency (totals are never compared across
-  currencies). Prices come only from stored provider/estimate rows: no AI, no
+  currencies), or any stored value is unusable (the plan's stored result is
+  not valid JSON, its exchange-rate list is not a list, or any rate's date is
+  not a real `YYYY-MM-DD` date). Prices come only from stored provider/estimate rows: no AI, no
   currency conversion at read time. Consumers must show a price with
   `isEstimate` as an estimate and show `asOf` as an "as of" date, never as a
   live price (Jarvis does both).
