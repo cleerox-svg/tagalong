@@ -451,6 +451,65 @@ already used.
     explains sign-in.
 11. Promote the internal release to production when the checks pass.
 
+## 1j. Jarvis read API
+
+`tagalong-api` exports a named `WorkerEntrypoint`, `JarvisReadApi`
+(`apps/api/src/jarvis-read-api.ts`, query code in
+`apps/api/src/lib/jarvis-read.ts`), so the owner's Jarvis assistant can say
+which saved trips are coming up. It is **read-only**: every statement is a
+`SELECT`, and Jarvis can never plan, save, share or change anything.
+
+- **Service binding only.** There is no public route and no `fetch` method; it
+  is reached only by a Worker on the same Cloudflare account through a service
+  binding. No new binding or var on this side.
+- **Two methods (contract v1).** `ping()` returns
+  `{ app: "tagalong", contractVersion: 1 }`. `getUpcomingTrips(userEmail)`
+  returns `{ trips: { title, date, city, cheapest }[] }`: the user's saved
+  trips (My trips) dated from yesterday (UTC) on, soonest first, at most 20.
+  `title` is the event name, else the event the user asked for (1-120 chars);
+  `date` is `YYYY-MM-DD`; `city` is 1-80 chars or `null`. `cheapest` is the
+  lowest stored package total of the trip's newest plan,
+  `{ amountMinor, currency, isEstimate, asOf }` (`isEstimate` when any line
+  in that package is an estimate, `asOf` the oldest line's fetch time), or
+  `null` when the plan isn't finished or has no package. Prices come only from
+  stored provider/estimate rows: no AI, no currency conversion.
+- **Never returned:** the free-text request, budget, party size, preferences,
+  origin or home location, ages, groups, chat, DMs, share links, alerts,
+  display names or booking links.
+- **Users are identified by email**, trimmed and lowercased. It must match
+  exactly one live account that signed in with Google (Apple-only and deleted
+  accounts never match), and it must be on `JARVIS_READ_EMAILS`. Anything else
+  (bad input, unknown address, several matching accounts) gets
+  `{ trips: [] }`.
+- **Allowlist secret.** `JARVIS_READ_EMAILS` lists the addresses whose trips
+  may be read: comma, space or semicolon separated, case-insensitive. It is a
+  Worker **secret**, not a var, because this repository is public. Unset or
+  empty means every call gets `{ trips: [] }` (fails closed). Set it with
+
+  ```sh
+  pnpm --filter @tagalong/api exec wrangler secret put JARVIS_READ_EMAILS
+  ```
+
+  or in the dashboard (Workers & Pages → `tagalong-api` → Settings → Variables
+  and Secrets → Add → type **Secret**, not Text).
+
+- **Errors.** An internal failure (for example D1) is logged here without the
+  email, and `getUpcomingTrips` rejects with a fixed `tagalong_unavailable`;
+  the real error never crosses the binding, and an outage is never reported as
+  no trips.
+- **The binding lives in Jarvis**, not here:
+  `{ "binding": "TAGALONG", "service": "tagalong-api", "entrypoint": "JarvisReadApi" }`.
+  Tagalong must be deployed with this export **before** Jarvis adds it; a
+  binding to a missing entrypoint breaks Jarvis's deploy.
+- **Shape changes need contract v2**, agreed with Jarvis first.
+- **Trust boundary (accepted by the owner).** A service binding carries no
+  caller identity, so any Worker deployable to this Cloudflare account could
+  bind to `JarvisReadApi`. The allowlist limits whose data it returns, not who
+  calls. This is accepted because anyone able to deploy there can already read
+  the database directly. Keep the account's Workers limited to the owner's own
+  apps, keep the response minimal, and treat any widening as a contract v2
+  with the `hold` label and a security review.
+
 ## Phase 7 (store readiness) in short
 
 Sign in with Apple (§1g), the HTTPS app callback (§1f), and in-app account

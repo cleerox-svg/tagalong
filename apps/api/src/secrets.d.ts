@@ -37,6 +37,13 @@ interface WorkerSecrets {
 	 * sign-in answers "misconfigured".
 	 */
 	APPLE_PRIVATE_KEY?: string;
+	/**
+	 * Jarvis read API: the emails whose upcoming saved trips JarvisReadApi may
+	 * return (comma, space or semicolon separated, case-insensitive). A secret,
+	 * not a var, because the repository is public. Optional: unset or empty
+	 * means every call answers no trips (fails closed). See docs/SETUP.md.
+	 */
+	JARVIS_READ_EMAILS?: string;
 }
 
 declare namespace Cloudflare {
