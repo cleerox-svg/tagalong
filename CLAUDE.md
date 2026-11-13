@@ -101,11 +101,21 @@ on its current head commit, it is not a draft, it has no `hold` label, and no
 review requests changes (`.github/workflows/auto-merge.yml`). The merge then
 dispatches `deploy.yml`: gate → D1 migrations → Worker deploy → smoke test.
 
+**The orchestrator merges its own PRs** (owner decision, 2026-11-13: "Just auto
+merge going forward"), without asking, including `hold` and guarded-path PRs,
+once: CI is green on the current head commit, the PR is mergeable and no review
+requests changes; the pipeline above finished clean (no open CRITICAL/HIGH, or
+MEDIUM correctness/security, finding); and any ordering dependency is met (e.g.
+a binding PR only after the service it binds is merged and live). Never merge
+red or incomplete CI, or another session's or person's PR unless the owner
+asks. Sub-agents never merge. After merging, confirm the deploy is live and
+report what merged.
+
 - Open PRs as **drafts** while work is in progress. Marking a PR ready for
   review is the signal that it may merge.
-- Add the `hold` label to anything that needs a person to look first:
-  destructive data changes, new bindings or secrets, CI/workflow changes, auth
-  or access changes.
+- Add the `hold` label to destructive data changes, new bindings or secrets,
+  CI/workflow changes, and auth or access changes. It stops the workflow merging
+  on its own; the orchestrator merges it once the checks above pass.
 - Never skip, disable, or weaken a test or a CI check to get green.
 - Never push to `main` directly. Once a PR has merged, follow-up work starts on a
   fresh branch from the new `main`.
