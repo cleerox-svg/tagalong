@@ -19,11 +19,53 @@ afterEach(() => {
 // Harness
 // ---------------------------------------------------------------------------
 
+/**
+ * A verbatim copy of Jarvis's Tagalong contract (jarvis
+ * apps/api/src/lib/connections/contract.ts, `TagalongTripsSchema`, zod 4).
+ * Jarvis drops the whole answer if it fails this, so every successful
+ * getUpcomingTrips result in this file is parsed against it (see `api`).
+ */
+const label = (max: number) => z.string().trim().min(1).max(max);
+const TagalongTripsSchema = z.object({
+	trips: z
+		.array(
+			z.object({
+				title: label(120),
+				date: z.iso.date(),
+				city: label(80).nullable(),
+				cheapest: z
+					.object({
+						amountMinor: z.number().int().min(0).max(10_000_000_000),
+						currency: z.string().regex(/^[A-Z]{3}$/),
+						isEstimate: z.boolean(),
+						asOf: z.iso.datetime({ offset: true }),
+					})
+					.nullable(),
+			}),
+		)
+		.max(20),
+});
+
+/** How many results the wrapper in `api` has checked against Jarvis's schema. */
+let conformanceChecks = 0;
+
 function api(allowlist?: string, overrides: Partial<Env> = {}): JarvisReadApi {
 	const e = { ...env, ...overrides } as Env;
 	if (allowlist === undefined) delete (e as { JARVIS_READ_EMAILS?: string }).JARVIS_READ_EMAILS;
 	else e.JARVIS_READ_EMAILS = allowlist;
-	return new JarvisReadApi(createExecutionContext(), e);
+	const a = new JarvisReadApi(createExecutionContext(), e);
+	// Every successful answer must be one Jarvis accepts; rejections pass through.
+	const read = a.getUpcomingTrips.bind(a);
+	a.getUpcomingTrips = async (email: unknown) => {
+		const res = await read(email);
+		const parsed = TagalongTripsSchema.safeParse(res);
+		if (!parsed.success) {
+			throw new Error(`not Jarvis-conformant: ${parsed.error.message}\n${JSON.stringify(res)}`);
+		}
+		conformanceChecks++;
+		return res;
+	};
+	return a;
 }
 
 const uid = () => crypto.randomUUID();
@@ -84,14 +126,26 @@ interface PackageSeed {
 async function seedPlan(
 	userId: string,
 	tripId: string,
-	opts: { eventId?: string | null; status?: string; packages?: PackageSeed[] } = {},
+	opts: {
+		eventId?: string | null;
+		status?: string;
+		packages?: PackageSeed[];
+		resultJson?: string;
+	} = {},
 ): Promise<string> {
 	const planId = `jr-plan-${uid()}`;
 	await env.DB.prepare(
 		`INSERT INTO plans (id, user_id, trip_request_id, event_id, status, result_json)
-		 VALUES (?, ?, ?, ?, ?, '{}')`,
+		 VALUES (?, ?, ?, ?, ?, ?)`,
 	)
-		.bind(planId, userId, tripId, opts.eventId ?? null, opts.status ?? "done")
+		.bind(
+			planId,
+			userId,
+			tripId,
+			opts.eventId ?? null,
+			opts.status ?? "done",
+			opts.resultJson ?? "{}",
+		)
 		.run();
 	const labels = ["cheapest", "best_value", "best_experience", "weekend", "alternative"];
 	for (const pk of opts.packages ?? []) {
@@ -145,6 +199,8 @@ interface TripSeed {
 	/** Packages of an OLDER plan (saved_trips.plan_id), which must be ignored. */
 	oldPlanPackages?: PackageSeed[];
 	createdAt?: string;
+	/** plans.result_json of the latest plan; omitted → '{}'. */
+	resultJson?: string;
 }
 
 async function seedTrip(
@@ -173,6 +229,7 @@ async function seedTrip(
 	const planId = await seedPlan(userId, tripId, {
 		eventId,
 		...(t.status !== undefined ? { status: t.status } : {}),
+		...(t.resultJson !== undefined ? { resultJson: t.resultJson } : {}),
 		packages: t.packages ?? [],
 	});
 	if (t.saved !== false) {
