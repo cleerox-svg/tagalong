@@ -616,7 +616,7 @@ describe("cheapest price", () => {
 	it("breaks a tie on total by rank", async () => {
 		const c = await cheapestOf({
 			packages: [
-				{ rank: 2, total: 5000, currency: "USD", items: [{ isEstimate: true }] },
+				{ rank: 2, total: 5000, currency: "EUR", items: [{ isEstimate: true }] },
 				{ rank: 1, total: 5000, currency: "EUR", items: [{ isEstimate: false }] },
 			],
 		});

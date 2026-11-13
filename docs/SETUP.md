@@ -470,9 +470,14 @@ which saved trips are coming up. It is **read-only**: every statement is a
   `date` is `YYYY-MM-DD`; `city` is 1-80 chars or `null`. `cheapest` is the
   lowest stored package total of the trip's newest plan,
   `{ amountMinor, currency, isEstimate, asOf }` (`isEstimate` when any line
-  in that package is an estimate, `asOf` the oldest line's fetch time), or
-  `null` when the plan isn't finished or has no package. Prices come only from
-  stored provider/estimate rows: no AI, no currency conversion.
+  in that package is an estimate; `asOf` the oldest of the lines' provider
+  fetch times and the date of the oldest exchange rate the plan converted
+  with), or `null` when the plan isn't finished, has no package, or its
+  packages are not all in one currency (totals are never compared across
+  currencies). Prices come only from stored provider/estimate rows: no AI, no
+  currency conversion at read time. Consumers must show a price with
+  `isEstimate` as an estimate and show `asOf` as an "as of" date, never as a
+  live price (Jarvis does both).
 - **Never returned:** the free-text request, budget, party size, preferences,
   origin or home location, ages, groups, chat, DMs, share links, alerts,
   display names or booking links.

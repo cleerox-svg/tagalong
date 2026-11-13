@@ -116,12 +116,20 @@ interface CheapestRow {
 	currency: string | null;
 	is_estimate: number | null;
 	fetched_at: string | null;
+	/** Distinct currencies across all of the plan's packages. */
+	currencies: number | null;
+	/** Oldest exchange-rate date the plan converted with (result_json.fx[].as_of), or null. */
+	fx_as_of: unknown;
 }
 
 /**
  * The cheapest package of a finished plan, from its stored rows only. Null
- * when the package has no items, or any stored value is outside the contract
- * (better to show no price than a wrong one).
+ * when the package has no items, the plan's packages are not all in one
+ * currency (totals are never compared across currencies), or any stored value
+ * is outside the contract (better to show no price than a wrong one).
+ *
+ * `asOf` is the oldest of the package items' fetch times and the date of the
+ * oldest exchange rate the plan converted with.
  */
 function toCheapest(rows: CheapestRow[]): JarvisCheapest | null {
 	const first = rows[0];
@@ -135,6 +143,7 @@ function toCheapest(rows: CheapestRow[]): JarvisCheapest | null {
 	)
 		return null;
 	if (typeof currency !== "string" || !CURRENCY_RE.test(currency)) return null;
+	if (first.currencies !== 1) return null;
 
 	let isEstimate = false;
 	let oldest: number | null = null;
@@ -147,6 +156,13 @@ function toCheapest(rows: CheapestRow[]): JarvisCheapest | null {
 		if (r.is_estimate === 1) isEstimate = true;
 	}
 	if (oldest === null) return null;
+	const fx = first.fx_as_of;
+	if (fx !== null && fx !== undefined) {
+		if (typeof fx !== "string") return null;
+		const t = Date.parse(DATE_RE.test(fx) ? `${fx}T00:00:00Z` : fx);
+		if (Number.isNaN(t)) return null;
+		if (t < oldest) oldest = t;
+	}
 	return { amountMinor: amount, currency, isEstimate, asOf: new Date(oldest).toISOString() };
 }
 
@@ -209,12 +225,19 @@ export async function readUpcomingTripsForJarvis(
 	const cheapestByPlan = new Map<string, JarvisCheapest | null>();
 	if (done.length > 0) {
 		const stmt = env.DB.prepare(
-			`SELECT pk.total_minor, pk.currency, pi.is_estimate, pi.fetched_at
+			`SELECT pk.total_minor, pk.currency, pi.is_estimate, pi.fetched_at,
+			   (SELECT COUNT(DISTINCT currency) FROM packages WHERE plan_id = ?) AS currencies,
+			   (SELECT MIN(NULLIF(json_extract(f.value, '$.as_of'), ''))
+			      FROM plans pl,
+			           json_each(CASE WHEN json_valid(pl.result_json) THEN pl.result_json ELSE '{}' END, '$.fx') f
+			      WHERE pl.id = ?) AS fx_as_of
 			 FROM packages pk
 			 LEFT JOIN package_items pi ON pi.package_id = pk.id
 			 WHERE pk.id = (SELECT id FROM packages WHERE plan_id = ? ORDER BY total_minor, rank LIMIT 1)`,
 		);
-		const answers = await env.DB.batch<CheapestRow>(done.map((p) => stmt.bind(p.row.plan_id)));
+		const answers = await env.DB.batch<CheapestRow>(
+			done.map((p) => stmt.bind(p.row.plan_id, p.row.plan_id, p.row.plan_id)),
+		);
 		done.forEach((p, i) => cheapestByPlan.set(p.row.plan_id, toCheapest(answers[i]!.results)));
 	}
 
