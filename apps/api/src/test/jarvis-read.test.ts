@@ -6,13 +6,19 @@
  * seeded with prepared statements against the real /migrations schema.
  */
 import { createExecutionContext, env } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { JarvisReadApi as ExportedFromIndex } from "../index.js";
 import { JarvisReadApi } from "../jarvis-read-api.js";
 import { upcomingCutoff } from "../lib/jarvis-read.js";
 
 afterEach(() => {
 	vi.restoreAllMocks();
+});
+
+afterAll(() => {
+	// Guards the wrapper itself: if it stopped running, conformance would pass vacuously.
+	expect(conformanceChecks).toBeGreaterThan(40);
 });
 
 // ---------------------------------------------------------------------------
@@ -776,6 +782,244 @@ describe("cheapest price", () => {
 		["empty currency", 100, ""],
 	])("null for an out-of-contract stored value (%s)", async (_n, total, currency) => {
 		expect(await cheapestOf({ packages: [{ rank: 1, total, currency }] })).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 6b. One currency per comparison, and asOf covers the FX rate date
+// ---------------------------------------------------------------------------
+
+/** plans.result_json exactly as planning/run.ts writes it, with the given fx entries. */
+function planResult(fx: { from: string; to?: string; rate?: number; as_of: unknown }[]): string {
+	return JSON.stringify({
+		considered: 12,
+		within_budget: 3,
+		budget_total_minor: 99_999,
+		currency: "CAD",
+		cheapest_over_budget_minor: null,
+		fx: fx.map((f) => ({ from: f.from, to: f.to ?? "CAD", rate: f.rate ?? 1.37, as_of: f.as_of })),
+		// Older than everything below: must never be taken for the price's date.
+		estimates: { version: 1, as_of: "2020-01-01T00:00:00Z" },
+		live: { flights: "ok", hotels: "ok" },
+		prices_checked_at: "2026-11-09T00:00:00.000Z",
+		other_events: [],
+	});
+}
+
+const ITEMS = [
+	{ fetchedAt: "2026-11-08T09:00:00.000Z" },
+	{ fetchedAt: "2026-11-06T15:30:00.000Z" },
+];
+
+describe("cheapest: currencies", () => {
+	it("null when the plan's packages are in more than one currency", async () => {
+		expect(
+			await cheapestOf({
+				packages: [
+					{ rank: 1, total: 50_000, currency: "CAD" },
+					{ rank: 2, total: 60_000, currency: "USD" },
+				],
+			}),
+		).toBeNull();
+	});
+
+	it("null even when the numerically cheaper total is in another currency", async () => {
+		// 9,000 JPY is "smaller" than 50,000 CAD as a bare integer; never compared.
+		expect(
+			await cheapestOf({
+				packages: [
+					{ rank: 1, total: 50_000, currency: "CAD" },
+					{ rank: 2, total: 9_000, currency: "JPY" },
+				],
+			}),
+		).toBeNull();
+	});
+
+	it("null when only a dearer package carries the second currency", async () => {
+		expect(
+			await cheapestOf({
+				packages: [
+					{ rank: 1, total: 100, currency: "EUR" },
+					{ rank: 2, total: 200, currency: "EUR" },
+					{ rank: 3, total: 300, currency: "GBP" },
+				],
+			}),
+		).toBeNull();
+	});
+
+	it("an older plan in another currency does not affect the latest plan", async () => {
+		expect(
+			await cheapestOf({
+				oldPlanPackages: [{ rank: 1, total: 1, currency: "USD" }],
+				packages: [{ rank: 1, total: 700, currency: "CAD" }],
+			}),
+		).toMatchObject({ amountMinor: 700, currency: "CAD" });
+	});
+
+	it("single currency still returns the lowest, tie broken by rank", async () => {
+		const c = await cheapestOf({
+			packages: [
+				{ rank: 3, total: 8_000, currency: "USD", items: [{ isEstimate: true }] },
+				{ rank: 2, total: 4_000, currency: "USD", items: [{ isEstimate: true }] },
+				{ rank: 1, total: 4_000, currency: "USD", items: [{ isEstimate: false }] },
+			],
+		});
+		expect(c).toMatchObject({ amountMinor: 4_000, currency: "USD", isEstimate: false });
+	});
+});
+
+describe("cheapest: asOf with FX", () => {
+	it("is the FX as_of (midnight UTC) when older than every item's fetched_at", async () => {
+		const c = await cheapestOf({
+			resultJson: planResult([{ from: "USD", as_of: "2026-11-04" }]),
+			packages: [{ rank: 1, total: 5_000, items: ITEMS }],
+		});
+		expect(c).toEqual({
+			amountMinor: 5_000,
+			currency: "CAD",
+			isEstimate: false,
+			asOf: "2026-11-04T00:00:00.000Z",
+		});
+	});
+
+	it("is the oldest item's fetched_at when the FX date is newer", async () => {
+		const c = await cheapestOf({
+			resultJson: planResult([{ from: "USD", as_of: "2026-11-07" }]),
+			packages: [{ rank: 1, total: 5_000, items: ITEMS }],
+		});
+		expect(c!.asOf).toBe("2026-11-06T15:30:00.000Z");
+	});
+
+	it("an FX date on the same day as, but before, the oldest item wins", async () => {
+		const c = await cheapestOf({
+			resultJson: planResult([{ from: "USD", as_of: "2026-11-06" }]),
+			packages: [{ rank: 1, total: 5_000, items: ITEMS }],
+		});
+		expect(c!.asOf).toBe("2026-11-06T00:00:00.000Z");
+	});
+
+	it("with several fx entries, takes the oldest", async () => {
+		const c = await cheapestOf({
+			resultJson: planResult([
+				{ from: "USD", as_of: "2026-11-05" },
+				{ from: "GBP", as_of: "2026-11-02", rate: 1.8 },
+				{ from: "EUR", as_of: "2026-11-03", rate: 1.5 },
+			]),
+			packages: [{ rank: 1, total: 5_000, items: ITEMS }],
+		});
+		expect(c!.asOf).toBe("2026-11-02T00:00:00.000Z");
+	});
+
+	it("an empty fx list uses item times only", async () => {
+		const c = await cheapestOf({
+			resultJson: planResult([]),
+			packages: [{ rank: 1, total: 5_000, items: ITEMS }],
+		});
+		expect(c!.asOf).toBe("2026-11-06T15:30:00.000Z");
+	});
+
+	it("result_json with no fx key, or not JSON at all, uses item times only", async () => {
+		const { fx: _drop, ...noFx } = JSON.parse(planResult([])) as Record<string, unknown>;
+		for (const resultJson of [JSON.stringify(noFx), "{}", "not json"]) {
+			const c = await cheapestOf({
+				resultJson,
+				packages: [{ rank: 1, total: 5_000, items: ITEMS }],
+			});
+			expect(c!.asOf).toBe("2026-11-06T15:30:00.000Z");
+		}
+	});
+
+	it("estimates.as_of and prices_checked_at are never used as the price date", async () => {
+		const c = await cheapestOf({
+			resultJson: planResult([]),
+			packages: [{ rank: 1, total: 5_000, items: ITEMS }],
+		});
+		expect(c!.asOf).not.toBe("2020-01-01T00:00:00.000Z");
+	});
+
+	it("null when a stored FX as_of is unparseable", async () => {
+		expect(
+			await cheapestOf({
+				resultJson: planResult([
+					{ from: "USD", as_of: "2026-11-05" },
+					{ from: "GBP", as_of: "not a date" },
+				]),
+				packages: [{ rank: 1, total: 5_000, items: ITEMS }],
+			}),
+		).toBeNull();
+	});
+
+	it.each([
+		["a number", 20261104],
+		["an impossible date string", "2026-13-45"],
+	])("null when a stored FX as_of is %s", async (_n, asOf) => {
+		expect(
+			await cheapestOf({
+				resultJson: planResult([{ from: "USD", as_of: asOf }]),
+				packages: [{ rank: 1, total: 5_000, items: ITEMS }],
+			}),
+		).toBeNull();
+	});
+});
+
+describe("Jarvis contract conformance", () => {
+	it("a full answer with FX-derived asOf, mixed-currency nulls and estimates parses", async () => {
+		const email = freshEmail("conform");
+		const id = await seedUser(email);
+		await seedTrip(id, {
+			eventQuery: "FX trip",
+			dateFrom: day(1),
+			resultJson: planResult([{ from: "USD", as_of: "2026-11-01" }]),
+			packages: [{ rank: 1, total: 12_345, items: [{ isEstimate: true }, ...ITEMS] }],
+		});
+		await seedTrip(id, {
+			eventQuery: "Mixed",
+			dateFrom: day(2),
+			packages: [
+				{ rank: 1, total: 1, currency: "JPY" },
+				{ rank: 2, total: 2, currency: "CAD" },
+			],
+		});
+		await seedTrip(id, {
+			eventQuery: "q",
+			dateFrom: day(3),
+			eventCity: null,
+			event: { name: "Event", city: "Montréal", localDate: day(3) },
+			packages: [{ rank: 1, total: 0, currency: "KWD" }],
+		});
+		const res = await api(email).getUpcomingTrips(email);
+		// `api` already parsed it; parse again here so this test stands alone.
+		expect(TagalongTripsSchema.safeParse(res).success).toBe(true);
+		expect(res.trips.map((t) => t.cheapest)).toEqual([
+			{ amountMinor: 12_345, currency: "CAD", isEstimate: true, asOf: "2026-11-01T00:00:00.000Z" },
+			null,
+			{ amountMinor: 0, currency: "KWD", isEstimate: false, asOf: "2026-11-01T10:00:00.000Z" },
+		]);
+	});
+
+	it("the copied schema rejects what Jarvis would reject (it is not vacuous)", () => {
+		const ok = {
+			title: "T",
+			date: "2026-11-20",
+			city: null,
+			cheapest: {
+				amountMinor: 1,
+				currency: "CAD",
+				isEstimate: false,
+				asOf: "2026-11-01T00:00:00.000Z",
+			},
+		};
+		expect(TagalongTripsSchema.safeParse({ trips: [ok] }).success).toBe(true);
+		for (const bad of [
+			{ ...ok, title: "   " },
+			{ ...ok, date: "2026-02-30" },
+			{ ...ok, cheapest: { ...ok.cheapest, currency: "cad" } },
+			{ ...ok, cheapest: { ...ok.cheapest, amountMinor: 1.5 } },
+			{ ...ok, cheapest: { ...ok.cheapest, asOf: "2026-11-01" } },
+		]) {
+			expect(TagalongTripsSchema.safeParse({ trips: [bad] }).success).toBe(false);
+		}
+		expect(TagalongTripsSchema.safeParse({ trips: Array(21).fill(ok) }).success).toBe(false);
 	});
 });
 
