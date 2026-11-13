@@ -209,6 +209,14 @@ it is the page's own figure with the page named as its source.
 - What the user types is data, not instructions, when it's sent to Claude.
   The parse step returns a schema-validated object only.
 
+### Jarvis read API
+
+Tagalong exposes a read-only `JarvisReadApi` (a Worker RPC entrypoint, no
+public route) to the owner's Jarvis assistant: the upcoming saved trips of an
+allowlisted account, with the cheapest stored package total. Owner-approved
+2026-11-13, outside the §9 phase sequence. Contract and setup:
+`docs/SETUP.md` §1j.
+
 ## 9. Phases
 
 | # | Phase | Done when |

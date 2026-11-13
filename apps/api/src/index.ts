@@ -53,6 +53,8 @@ app.onError((err, c) => {
 export { app };
 // Durable Object class for wrangler.jsonc durable_objects.bindings (CHAT_ROOM).
 export { ChatRoom } from "./chat/room.js";
+// Read-only RPC entrypoint for Jarvis, reachable only via a service binding.
+export { JarvisReadApi } from "./jarvis-read-api.js";
 
 export default {
 	fetch: app.fetch,
