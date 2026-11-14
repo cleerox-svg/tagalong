@@ -41,7 +41,8 @@ interface WorkerSecrets {
 	 * Jarvis read API: the emails whose upcoming saved trips JarvisReadApi may
 	 * return (comma, space or semicolon separated, case-insensitive). A secret,
 	 * not a var, because the repository is public. Optional: unset or empty
-	 * means every call answers no trips (fails closed). See docs/SETUP.md.
+	 * means every call answers no trips (fails closed). The same list gates
+	 * the price-drop events sent to Jarvis (lib/jarvis-events.ts). See docs/SETUP.md.
 	 */
 	JARVIS_READ_EMAILS?: string;
 }

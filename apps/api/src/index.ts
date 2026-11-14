@@ -63,7 +63,7 @@ export default {
 	// are independent: either failing leaves the other running.
 	scheduled(controller, env, ctx) {
 		ctx.waitUntil(
-			checkSavedTrips(env).then(
+			checkSavedTrips(env, new Date(), ctx).then(
 				(r) => console.log("saved-trip price check", r),
 				(err) => console.error("saved-trip price check failed", err),
 			),

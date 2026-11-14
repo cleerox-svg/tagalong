@@ -20,9 +20,9 @@ export const JARVIS_CONTRACT_VERSION = 1;
 
 /** Jarvis rejects the whole answer past these, so they are enforced here. */
 const MAX_TRIPS = 20;
-const MAX_TITLE = 120;
+export const MAX_TITLE = 120;
 const MAX_CITY = 80;
-const MAX_AMOUNT_MINOR = 10_000_000_000;
+export const MAX_AMOUNT_MINOR = 10_000_000_000;
 /** RFC 5321's practical ceiling for an address. */
 const MAX_EMAIL = 320;
 /** Rows read before the per-row checks, so a few unusable rows don't shorten the list. */
@@ -81,10 +81,29 @@ export function upcomingCutoff(now: number = Date.now()): string {
 	return new Date(now - 86_400_000).toISOString().slice(0, 10);
 }
 
-function isRealDate(s: string): boolean {
+export function isRealDate(s: string): boolean {
 	if (!DATE_RE.test(s)) return false;
 	const d = new Date(`${s}T00:00:00Z`);
 	return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+/**
+ * The account Jarvis may see for this address: the trimmed, lowercased
+ * address must be on JARVIS_READ_EMAILS (unset or empty: nobody) and match
+ * exactly one live, Google-signed-in account. Anything else is null. Shared
+ * by the read API and the events Tagalong sends Jarvis (lib/jarvis-events.ts),
+ * so both apply the same rule.
+ */
+export async function jarvisUserForEmail(
+	env: Env,
+	email: unknown,
+): Promise<{ userId: string; email: string } | null> {
+	if (typeof email !== "string" || email.length > MAX_EMAIL) return null;
+	const normalised = email.trim().toLowerCase();
+	if (normalised === "") return null;
+	if (!parseAllowlist(env.JARVIS_READ_EMAILS).has(normalised)) return null;
+	const userId = await userIdForEmail(env.DB, normalised);
+	return userId ? { userId, email: normalised } : null;
 }
 
 /**
@@ -111,7 +130,7 @@ interface TripRow {
 	city: string | null;
 }
 
-interface CheapestRow {
+export interface CheapestRow {
 	total_minor: number | null;
 	currency: string | null;
 	is_estimate: number | null;
@@ -155,6 +174,17 @@ function oldestFxDate(resultJson: unknown): number | undefined | "invalid" {
 }
 
 /**
+ * A plan's cheapest package and its items, as CheapestRow rows for
+ * toCheapest. Bind the plan id three times.
+ */
+export const CHEAPEST_SQL = `SELECT pk.total_minor, pk.currency, pi.is_estimate, pi.fetched_at,
+   (SELECT COUNT(DISTINCT currency) FROM packages WHERE plan_id = ?) AS currencies,
+   (SELECT result_json FROM plans WHERE id = ?) AS result_json
+ FROM packages pk
+ LEFT JOIN package_items pi ON pi.package_id = pk.id
+ WHERE pk.id = (SELECT id FROM packages WHERE plan_id = ? ORDER BY total_minor, rank LIMIT 1)`;
+
+/**
  * The cheapest package of a finished plan, from its stored rows only. Null
  * when the package has no items, the plan's packages are not all in one
  * currency (totals are never compared across currencies), or any stored value
@@ -165,7 +195,7 @@ function oldestFxDate(resultJson: unknown): number | undefined | "invalid" {
  * result_json is not valid JSON, its `fx` is not a list, or any stored rate
  * date is not a real YYYY-MM-DD date.
  */
-function toCheapest(rows: CheapestRow[]): JarvisCheapest | null {
+export function toCheapest(rows: CheapestRow[]): JarvisCheapest | null {
 	const first = rows[0];
 	if (!first) return null;
 	const { total_minor: amount, currency } = first;
@@ -210,13 +240,9 @@ export async function readUpcomingTripsForJarvis(
 	email: unknown,
 	now: number = Date.now(),
 ): Promise<JarvisUpcomingTrips> {
-	if (typeof email !== "string" || email.length > MAX_EMAIL) return empty();
-	const normalised = email.trim().toLowerCase();
-	if (normalised === "") return empty();
-	if (!parseAllowlist(env.JARVIS_READ_EMAILS).has(normalised)) return empty();
-
-	const userId = await userIdForEmail(env.DB, normalised);
-	if (!userId) return empty();
+	const user = await jarvisUserForEmail(env, email);
+	if (!user) return empty();
+	const userId = user.userId;
 
 	// Same joins and ordering as GET /trips, plus a stable tie-break.
 	const { results } = await env.DB.prepare(
@@ -254,14 +280,7 @@ export async function readUpcomingTripsForJarvis(
 	const done = picked.filter((p) => p.row.status === "done");
 	const cheapestByPlan = new Map<string, JarvisCheapest | null>();
 	if (done.length > 0) {
-		const stmt = env.DB.prepare(
-			`SELECT pk.total_minor, pk.currency, pi.is_estimate, pi.fetched_at,
-			   (SELECT COUNT(DISTINCT currency) FROM packages WHERE plan_id = ?) AS currencies,
-			   (SELECT result_json FROM plans WHERE id = ?) AS result_json
-			 FROM packages pk
-			 LEFT JOIN package_items pi ON pi.package_id = pk.id
-			 WHERE pk.id = (SELECT id FROM packages WHERE plan_id = ? ORDER BY total_minor, rank LIMIT 1)`,
-		);
+		const stmt = env.DB.prepare(CHEAPEST_SQL);
 		const answers = await env.DB.batch<CheapestRow>(
 			done.map((p) => stmt.bind(p.row.plan_id, p.row.plan_id, p.row.plan_id)),
 		);

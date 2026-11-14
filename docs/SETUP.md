@@ -517,6 +517,39 @@ which saved trips are coming up. It is **read-only**: every statement is a
   apps, keep the response minimal, and treat any widening as a contract v2
   with the `hold` label and a security review.
 
+## 1k. Jarvis events
+
+When the scheduled price re-check (§1c) records a price drop, Tagalong
+also tells Jarvis, so it can alert the owner. Code:
+`apps/api/src/lib/jarvis-events.ts`, called from `apps/api/src/planning/alerts.ts`.
+
+- **Queue, producer only.** `wrangler.jsonc` binds `JARVIS_EVENTS` to the
+  Cloudflare Queue `jarvis-events-tagalong`. Tagalong only sends; Jarvis owns
+  the queue and its consumer. **The queue is created by Jarvis's setup**, not
+  here: do not create it from this repository.
+- **Order matters.** Deploy this binding **only after Jarvis's consumer is
+  live** (the queue must exist, or `wrangler deploy` fails). The PR adding it
+  carries `hold` for that reason.
+- **CI token.** The `CLOUDFLARE_API_TOKEN` (§2) also needs **Account → Queues:
+  Edit**, because `wrangler deploy` attaches the producer binding.
+- **One event, contract v1** (Jarvis `docs/EVENTS.md`): `tagalong.price_drop`,
+  `{ app: "tagalong", contractVersion: 1, eventId: "pd_<price alert id>",
+type, userEmail, occurredAt, payload: { tripTitle, tripDate, was, now } }`.
+  `was` / `now` are the alert's stored old and new totals in the trip's
+  currency (never recomputed or converted, never from AI); `now.isEstimate`
+  and `now.asOf` describe the stored cheapest package exactly as the read API
+  (§1j) does. `tripTitle` and `tripDate` are the read API's title and date.
+  The eventId is the same for the same alert, so Jarvis can drop repeats.
+- **Who.** Only users the read API would answer for: on `JARVIS_READ_EMAILS`,
+  signed in with Google, not deleted, and the only live account with that
+  address. Everyone else: nothing is sent. No new secret or var.
+- **Never in the way.** The send runs in the background after the alert is
+  stored. A failure is logged (without the email or trip) and never affects
+  the price check, Tagalong's own push or email, or the cron. Without the
+  binding, or with an empty allowlist, it does nothing. If the alert's total
+  no longer matches the stored cheapest package, nothing is sent rather than
+  a mislabelled price.
+
 ## Phase 7 (store readiness) in short
 
 Sign in with Apple (§1g), the HTTPS app callback (§1f), and in-app account
@@ -546,6 +579,9 @@ Settings → Secrets and variables → Actions → **Secrets**:
 | `CLOUDFLARE_ACCOUNT_ID` | the Cloudflare account ID                                                |
 
 The same token BVOM uses works if it carries those permissions.
+
+It also needs **Account → Queues: Edit** for the `JARVIS_EVENTS` producer
+binding (§1k).
 
 The token also needs **Zone → Workers Routes: Edit** (and **DNS: Edit**) on the
 `averrow.com` zone, because the Worker is served on the Custom Domain
