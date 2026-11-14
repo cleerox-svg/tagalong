@@ -47,7 +47,10 @@ export interface BuildInput {
 	venue: Venue;
 	is_alternative_event: boolean;
 	fx: FxTable;
-	/** When the provider data (event, prices) was fetched. */
+	/**
+	 * When this planning run fetched the provider data. Ticket lines use the
+	 * event's older `price_fetched_at` instead when it has one.
+	 */
 	fetched_at: string;
 	/**
 	 * Live prices from booking sources, keyed by stay window (windowKey). Where
@@ -127,11 +130,29 @@ export function eventSourceName(event: Pick<EventInfo, "provider" | "url">): str
 	}
 }
 
+/**
+ * "As of" for ticket lines built from the provider's price: the event's own
+ * `price_fetched_at` when it is a valid time no later than this run, else the
+ * run time. A line is never labelled newer than the data it came from.
+ */
+export function ticketPriceAsOf(
+	event: Pick<EventInfo, "price_fetched_at">,
+	runFetchedAt: string,
+): string {
+	const stored = event.price_fetched_at;
+	if (stored === undefined) return runFetchedAt;
+	const storedMs = Date.parse(stored);
+	const runMs = Date.parse(runFetchedAt);
+	if (Number.isNaN(storedMs) || Number.isNaN(runMs)) return runFetchedAt;
+	return storedMs < runMs ? stored : runFetchedAt;
+}
+
 function ticketItems(input: BuildInput): Map<SeatTier, CandidateItem[]> {
 	const { event, request } = input;
 	const party = request.party_size;
 	const out = new Map<SeatTier, CandidateItem[]>();
 	const pr = event.price_range;
+	const asOf = ticketPriceAsOf(event, input.fetched_at);
 	const url = event.url;
 	const source = eventSourceName(event);
 	const tickets = `ticket${party > 1 ? "s" : ""}`;
@@ -161,7 +182,7 @@ function ticketItems(input: BuildInput): Map<SeatTier, CandidateItem[]> {
 				currency: pr.currency,
 				is_estimate: false,
 				booking_url: url,
-				fetched_at: input.fetched_at,
+				fetched_at: asOf,
 				method: `${source} lists this event as free. Registration may still be needed`,
 			},
 		]);
@@ -185,7 +206,7 @@ function ticketItems(input: BuildInput): Map<SeatTier, CandidateItem[]> {
 				...face,
 				is_estimate: interpolated,
 				booking_url: url,
-				fetched_at: input.fetched_at,
+				fetched_at: asOf,
 				method: interpolated
 					? `Midpoint of ${source}'s listed face-value range: ${eachStr} each × ${party}`
 					: `${source} listed face value: ${eachStr} each × ${party}`,

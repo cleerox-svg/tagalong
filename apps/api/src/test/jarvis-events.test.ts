@@ -128,12 +128,23 @@ interface SeedOpts {
 	/** fetched_at of the single package item. */
 	fetchedAt?: string;
 	createdAt?: string;
+	/** The owner's saved_trips row for the trip: alerts on (default), off, or not saved. */
+	saved?: "on" | "off" | "none";
+}
+
+interface Seeded {
+	/** The trimmed, lowercased address. */
+	email: string;
+	/** users.email exactly as stored (padded, mixed case): what the cron passes. */
+	storedEmail: string;
+	userId: string;
+	alertId: string;
+	planId: string;
+	tripId: string;
 }
 
 /** A user, a trip with an event, a finished plan with one package, and an alert on it. */
-async function seedAlert(
-	opts: SeedOpts = {},
-): Promise<{ email: string; userId: string; alertId: string; planId: string }> {
+async function seedAlert(opts: SeedOpts = {}): Promise<Seeded> {
 	const email = opts.email ?? `Ev-${uid()}@Example.com`;
 	const userId = `je-user-${uid()}`;
 	await env.DB.prepare(
@@ -217,7 +228,31 @@ async function seedAlert(
 			opts.createdAt ?? "2026-11-14T09:30:12.345Z",
 		)
 		.run();
-	return { email: email.trim().toLowerCase(), userId, alertId, planId };
+	if ((opts.saved ?? "on") !== "none") {
+		// last_checked_at far ahead: the cron tests' re-check never picks these up.
+		await env.DB.prepare(
+			`INSERT INTO saved_trips (user_id, plan_id, trip_request_id, latest_plan_id, alerts_enabled, best_total_minor, currency, last_checked_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, '9999-01-01T00:00:00.000Z')`,
+		)
+			.bind(
+				userId,
+				planId,
+				tripId,
+				planId,
+				opts.saved === "off" ? 0 : 1,
+				newTotal,
+				opts.alertCurrency ?? pkgCurrency,
+			)
+			.run();
+	}
+	return {
+		email: email.trim().toLowerCase(),
+		storedEmail: ` ${email} `,
+		userId,
+		alertId,
+		planId,
+		tripId,
+	};
 }
 
 describe("tagalong.price_drop event", () => {
@@ -262,21 +297,23 @@ describe("tagalong.price_drop event", () => {
 	it("is queued as an object, and a send failure or missing binding never throws", async () => {
 		const a = await seedAlert();
 		const ok = stubQueue();
-		await notifyJarvisPriceDrop(withEnv(a.email, ok.queue), a.alertId, a.userId);
+		await notifyJarvisPriceDrop(withEnv(a.email, ok.queue), a.alertId, a.userId, a.storedEmail);
 		expect(ok.sent).toHaveLength(1);
 		expect(ok.sent[0]).toMatchObject({ eventId: `pd_${a.alertId}` });
 
 		const down = stubQueue(true);
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		await expect(
-			notifyJarvisPriceDrop(withEnv(a.email, down.queue), a.alertId, a.userId),
+			notifyJarvisPriceDrop(withEnv(a.email, down.queue), a.alertId, a.userId, a.storedEmail),
 		).resolves.toBeUndefined();
 		expect(warn).toHaveBeenCalled();
 		expect(JSON.stringify(warn.mock.calls)).not.toContain(a.email);
+		// Only the error's name is logged, never its message.
+		expect(JSON.stringify(warn.mock.calls)).not.toContain("queue down");
 		warn.mockRestore();
 
 		await expect(
-			notifyJarvisPriceDrop(withEnv(a.email), a.alertId, a.userId),
+			notifyJarvisPriceDrop(withEnv(a.email), a.alertId, a.userId, a.storedEmail),
 		).resolves.toBeUndefined();
 		expect(await sendJarvisEvent(withEnv(a.email), {} as JarvisEvent)).toBe(false);
 	});
@@ -292,9 +329,12 @@ describe("tagalong.price_drop event", () => {
 // ---------------------------------------------------------------------------
 
 /** Builds and queues one alert's event; returns what the queue received. */
-async function notify(allowlist: string | undefined, a: { alertId: string; userId: string }) {
+async function notify(
+	allowlist: string | undefined,
+	a: { alertId: string; userId: string; storedEmail: string },
+) {
 	const q = stubQueue();
-	await notifyJarvisPriceDrop(withEnv(allowlist, q.queue), a.alertId, a.userId);
+	await notifyJarvisPriceDrop(withEnv(allowlist, q.queue), a.alertId, a.userId, a.storedEmail);
 	return q;
 }
 
@@ -372,12 +412,113 @@ describe("no binding or no allowlist: a no-op without even a DB read", () => {
 		const q = stubQueue();
 		const warn = vi.spyOn(console, "warn");
 		const t = trapDb(allowlist, withQueue ? q.queue : undefined);
-		await expect(notifyJarvisPriceDrop(t.e, "some-alert-id", "some-user")).resolves.toBeUndefined();
+		await expect(
+			notifyJarvisPriceDrop(t.e, "some-alert-id", "some-user", "someone@example.com"),
+		).resolves.toBeUndefined();
 		expect(t.prepare).not.toHaveBeenCalled();
 		expect(t.batch).not.toHaveBeenCalled();
 		expect(q.send).not.toHaveBeenCalled();
 		// Returned before the try: nothing failed, so nothing was logged.
 		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["an owner not on the allowlist", "other@example.com"],
+		["an allowlisted address plus a suffix", "someone@example.com.evil"],
+		["an owner with no email (Apple, none shared)", null],
+		["a blank owner email", "   "],
+	])("%s: no DB read, nothing sent", async (_name, ownerEmail) => {
+		const q = stubQueue();
+		const warn = vi.spyOn(console, "warn");
+		const t = trapDb("someone@example.com", q.queue);
+		await expect(
+			notifyJarvisPriceDrop(t.e, "some-alert-id", "some-user", ownerEmail),
+		).resolves.toBeUndefined();
+		expect(t.prepare).not.toHaveBeenCalled();
+		expect(t.batch).not.toHaveBeenCalled();
+		expect(q.send).not.toHaveBeenCalled();
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it("an allowlisted owner (any case or padding) passes the pre-check and reads the DB", async () => {
+		const q = stubQueue();
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const t = trapDb("someone@example.com", q.queue);
+		await notifyJarvisPriceDrop(t.e, "some-alert-id", "some-user", "  SomeOne@Example.COM ");
+		expect(t.prepare).toHaveBeenCalled();
+		expect(q.send).not.toHaveBeenCalled();
+		// The trap's failure is logged by error name only: no message text.
+		expect(warn).toHaveBeenCalledWith("jarvis price-drop event failed", "Error");
+		expect(JSON.stringify(warn.mock.calls)).not.toContain("must not be read");
+	});
+});
+
+describe("the full account rule still applies after the pre-check", () => {
+	it("an allowlisted address passed in that isn't the alert owner's stored one sends nothing", async () => {
+		const a = await seedAlert();
+		const q = stubQueue();
+		await notifyJarvisPriceDrop(
+			withEnv("someone@example.com", q.queue),
+			a.alertId,
+			a.userId,
+			"someone@example.com",
+		);
+		expect(q.send).not.toHaveBeenCalled();
+	});
+});
+
+describe("only a live saved trip, with alerts on, of the alert's owner", () => {
+	it("sends nothing when the trip isn't saved", async () => {
+		const a = await seedAlert({ saved: "none" });
+		expect((await notify(a.email, a)).sent).toHaveLength(0);
+	});
+
+	it("sends nothing when the saved trip has alerts turned off", async () => {
+		const a = await seedAlert({ saved: "off" });
+		expect((await notify(a.email, a)).sent).toHaveLength(0);
+	});
+
+	it("sends once alerts are on again", async () => {
+		const a = await seedAlert({ saved: "off" });
+		await env.DB.prepare(
+			"UPDATE saved_trips SET alerts_enabled = 1 WHERE user_id = ? AND trip_request_id = ?",
+		)
+			.bind(a.userId, a.tripId)
+			.run();
+		expect((await notify(a.email, a)).sent).toHaveLength(1);
+	});
+
+	it("sends nothing when only another user saved the trip", async () => {
+		const a = await seedAlert({ saved: "none" });
+		const otherId = `je-other-${uid()}`;
+		await env.DB.prepare(
+			`INSERT INTO users (id, google_sub, email, display_name, birthdate_verified_18, home_currency)
+			 VALUES (?, ?, ?, 'Other', 1, 'CAD')`,
+		)
+			.bind(otherId, `3${Math.floor(Math.random() * 1e15)}`, `other-${uid()}@example.com`)
+			.run();
+		await env.DB.prepare(
+			`INSERT INTO saved_trips (user_id, plan_id, trip_request_id, latest_plan_id, alerts_enabled, currency, last_checked_at)
+			 VALUES (?, ?, ?, ?, 1, 'CAD', '9999-01-01T00:00:00.000Z')`,
+		)
+			.bind(otherId, a.planId, a.tripId, a.planId)
+			.run();
+		expect((await notify(a.email, a)).sent).toHaveLength(0);
+	});
+
+	it("sends nothing when the trip request belongs to another user", async () => {
+		const a = await seedAlert();
+		const otherId = `je-other-${uid()}`;
+		await env.DB.prepare(
+			`INSERT INTO users (id, google_sub, email, display_name, birthdate_verified_18, home_currency)
+			 VALUES (?, ?, ?, 'Other', 1, 'CAD')`,
+		)
+			.bind(otherId, `4${Math.floor(Math.random() * 1e15)}`, `other-${uid()}@example.com`)
+			.run();
+		await env.DB.prepare("UPDATE trip_requests SET user_id = ? WHERE id = ?")
+			.bind(otherId, a.tripId)
+			.run();
+		expect((await notify(a.email, a)).sent).toHaveLength(0);
 	});
 });
 

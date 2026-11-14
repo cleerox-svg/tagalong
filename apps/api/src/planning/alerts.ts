@@ -162,7 +162,7 @@ async function checkOneTrip(env: Env, trip: DueTrip, ctx?: WaitUntil): Promise<b
 	if (!recorded.meta.changes) return false; // the owner deleted their account
 	// Jarvis (allowlisted owners only). Never throws, so it can't affect the
 	// push, the email or the rest of the run.
-	const jarvis = notifyJarvisPriceDrop(env, alertId, trip.user_id);
+	const jarvis = notifyJarvisPriceDrop(env, alertId, trip.user_id, trip.email);
 	if (ctx) ctx.waitUntil(jarvis);
 	else await jarvis;
 	await dispatchPush(env, { kind: "price_drop", alertId }); // never throws; no-op without FCM

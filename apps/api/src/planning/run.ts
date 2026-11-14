@@ -42,6 +42,11 @@ async function setProgress(
 		.run();
 }
 
+/**
+ * Stores the event. `fetched_at` is when its price was fetched: this run's
+ * time for a live read, but the stored time for an event read back from
+ * storage (provider down), so repeated outages never refresh it.
+ */
 async function upsertEvent(db: D1Database, e: EventInfo, fetchedAt: string): Promise<string> {
 	const row = await db
 		.prepare(
@@ -73,7 +78,7 @@ async function upsertEvent(db: D1Database, e: EventInfo, fetchedAt: string): Pro
 			e.price_range?.min_minor ?? null,
 			e.price_range?.max_minor ?? null,
 			e.price_range?.currency ?? null,
-			fetchedAt,
+			e.price_fetched_at ?? fetchedAt,
 		)
 		.first<{ id: string }>();
 	if (!row) throw new Error("event upsert returned nothing");

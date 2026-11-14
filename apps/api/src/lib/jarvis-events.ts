@@ -15,8 +15,10 @@
  * reads it; when that package's total or currency doesn't match the alert, no
  * event is sent rather than a guessed one.
  *
- * Sending never throws: a failure is logged (without the email or trip) and
- * the price check, push and email go on. Without the binding it is a no-op.
+ * Sending never throws: a failure is logged by error name only (no message,
+ * so no email, trip or provider text can reach the logs) and the price check,
+ * push and email go on. Without the binding, or for an owner whose address
+ * isn't on the allowlist, it is a no-op without a DB read.
  */
 import {
 	CHEAPEST_SQL,
@@ -25,6 +27,7 @@ import {
 	jarvisUserForEmail,
 	MAX_AMOUNT_MINOR,
 	MAX_TITLE,
+	parseAllowlist,
 	toCheapest,
 	type CheapestRow,
 } from "./jarvis-read.js";
@@ -33,7 +36,6 @@ export const JARVIS_EVENTS_CONTRACT_VERSION = 1;
 /** Jarvis drops any message larger than this. */
 export const MAX_EVENT_BYTES = 4096;
 export const EVENT_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
-const CURRENCY_RE = /^[A-Z]{3}$/;
 
 export interface JarvisMoney {
 	amountMinor: number;
@@ -57,8 +59,8 @@ export interface JarvisPriceDropEvent {
 
 export type JarvisEvent = JarvisPriceDropEvent;
 
-const errText = (err: unknown) =>
-	err instanceof Error ? `${err.name}: ${err.message.slice(0, 200)}` : "unknown error";
+/** The error's name only: a message may carry an address or provider text. */
+const errName = (err: unknown) => (err instanceof Error ? err.name : "unknown error");
 
 /**
  * Queues one event for Jarvis. True when it was handed to the queue. Never
@@ -76,7 +78,7 @@ export async function sendJarvisEvent(env: Env, event: JarvisEvent): Promise<boo
 		await queue.send(event, { contentType: "json" });
 		return true;
 	} catch (err) {
-		console.warn("jarvis event send failed", event.type, errText(err));
+		console.warn("jarvis event send failed", event.type, errName(err));
 		return false;
 	}
 }
@@ -108,8 +110,8 @@ interface AlertRow {
 /**
  * The `tagalong.price_drop` event for one stored price_alerts row, or null
  * when it must not (or cannot honestly) be sent: the owner isn't on the
- * Jarvis allowlist with one live Google account, or a stored value is outside
- * the contract.
+ * Jarvis allowlist with one live Google account, the trip isn't saved with
+ * alerts on, or a stored value is outside the contract.
  */
 export async function buildPriceDropEvent(
 	env: Env,
@@ -125,7 +127,9 @@ export async function buildPriceDropEvent(
 		   COALESCE(e.local_date, t.date_from) AS trip_date
 		 FROM price_alerts a
 		 JOIN users u ON u.id = a.user_id AND u.deleted_at IS NULL
-		 JOIN trip_requests t ON t.id = a.trip_request_id
+		 JOIN trip_requests t ON t.id = a.trip_request_id AND t.user_id = a.user_id
+		 JOIN saved_trips s ON s.user_id = a.user_id AND s.trip_request_id = a.trip_request_id
+		   AND s.alerts_enabled = 1
 		 JOIN plans p ON p.id = a.plan_id AND p.user_id = a.user_id
 		 LEFT JOIN events e ON e.id = p.event_id
 		 WHERE a.id = ? AND a.user_id = ?`,
@@ -139,8 +143,9 @@ export async function buildPriceDropEvent(
 	const user = await jarvisUserForEmail(env, alert.email);
 	if (!user || user.userId !== alert.user_id) return null;
 
-	if (!isMinor(alert.old_total_minor) || !isMinor(alert.new_total_minor)) return null;
-	if (typeof alert.currency !== "string" || !CURRENCY_RE.test(alert.currency)) return null;
+	// new_total_minor and currency are checked below: they must equal the
+	// stored cheapest package's, which toCheapest has already validated.
+	if (!isMinor(alert.old_total_minor)) return null;
 	if (typeof alert.trip_date !== "string" || !isRealDate(alert.trip_date)) return null;
 	const occurredAt = isoSeconds(alert.created_at);
 	if (!occurredAt) return null;
@@ -191,18 +196,24 @@ export async function buildPriceDropEvent(
 
 /**
  * Tells Jarvis about a recorded price drop. Never throws, and does nothing
- * (not even a read) without the JARVIS_EVENTS binding or an allowlist.
+ * (not even a read) without the JARVIS_EVENTS binding, or when the owner's
+ * address (`ownerEmail`, as the caller already read it) isn't on the
+ * allowlist. buildPriceDropEvent still applies the full jarvisUserForEmail
+ * rule to the stored address afterwards.
  */
 export async function notifyJarvisPriceDrop(
 	env: Env,
 	alertId: string,
 	userId: string,
+	ownerEmail: string | null,
 ): Promise<void> {
 	if (!(env as Partial<Env>).JARVIS_EVENTS || !env.JARVIS_READ_EMAILS) return;
+	if (typeof ownerEmail !== "string") return;
+	if (!parseAllowlist(env.JARVIS_READ_EMAILS).has(ownerEmail.trim().toLowerCase())) return;
 	try {
 		const event = await buildPriceDropEvent(env, alertId, userId);
 		if (event) await sendJarvisEvent(env, event);
 	} catch (err) {
-		console.warn("jarvis price-drop event failed", errText(err));
+		console.warn("jarvis price-drop event failed", errName(err));
 	}
 }
