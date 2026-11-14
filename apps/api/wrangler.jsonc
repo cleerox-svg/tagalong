@@ -62,6 +62,14 @@
 		"bindings": [{ "name": "CHAT_ROOM", "class_name": "ChatRoom" }],
 	},
 
+	// Jarvis events (contract v1): a price drop recorded by the cron is sent to
+	// Jarvis, for allowlisted users only (JARVIS_READ_EMAILS). The queue is
+	// created and consumed by Jarvis; this Worker only produces. Deploy this
+	// only after Jarvis's consumer is live. See docs/SETUP.md "Jarvis events".
+	"queues": {
+		"producers": [{ "binding": "JARVIS_EVENTS", "queue": "jarvis-events-tagalong" }],
+	},
+
 	// Durable Object class migrations, applied by `wrangler deploy`. Append-only
 	// like /migrations: never edit or remove a tag, add a new one.
 	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatRoom"] }],

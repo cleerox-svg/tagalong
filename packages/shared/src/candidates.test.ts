@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildCandidates, stayWindow, windowKey } from "./candidates.js";
+import { buildCandidates, stayWindow, ticketPriceAsOf, windowKey } from "./candidates.js";
+import { ESTIMATES_AS_OF } from "./estimates.js";
 import { FxTable } from "./money.js";
 import type { EventInfo, TripRequest } from "./types.js";
 
@@ -192,6 +193,85 @@ describe("buildCandidates", () => {
 			fetched_at: "2026-11-06T10:00:00Z",
 		});
 		expect(cs.some((c) => c.nights === 0 && c.lodging_type === "none")).toBe(true);
+	});
+});
+
+describe("ticket price provenance (as of)", () => {
+	const RUN = "2026-11-06T10:00:00Z";
+	const OLDER = "2026-11-02T08:15:00.000Z";
+	const tierTicket = (cs: ReturnType<typeof build>, tier: string, provider = "ticketmaster") =>
+		cs.find((c) => c.ticket_tier === tier)?.items.find((i) => i.provider === provider);
+	const feeLines = (cs: ReturnType<typeof build>) =>
+		cs.flatMap((c) => c.items.filter((i) => i.kind === "ticket" && i.provider === "estimate"));
+
+	it("stamps provider ticket lines with the run time when the event has no price_fetched_at", () => {
+		const cs = build();
+		for (const tier of ["budget", "mid", "premium"]) {
+			expect(tierTicket(cs, tier)?.fetched_at).toBe(RUN);
+		}
+	});
+
+	it("keeps an older stored price_fetched_at on every provider ticket line", () => {
+		const cs = build(req(), event({ price_fetched_at: OLDER }));
+		for (const tier of ["budget", "mid", "premium"]) {
+			expect(tierTicket(cs, tier)?.fetched_at).toBe(OLDER);
+		}
+	});
+
+	it("keeps an older price_fetched_at on a free event's zero line", () => {
+		const cs = build(
+			req(),
+			event({
+				price_range: { min_minor: 0, max_minor: 0, currency: "USD" },
+				price_fetched_at: OLDER,
+			}),
+		);
+		const t = cs[0]?.items.find((i) => i.kind === "ticket");
+		expect(t).toMatchObject({ amount_minor: 0, is_estimate: false, fetched_at: OLDER });
+	});
+
+	it("never labels a ticket newer than the run: a future price_fetched_at falls back to the run time", () => {
+		const cs = build(req(), event({ price_fetched_at: "2026-11-07T00:00:00Z" }));
+		expect(tierTicket(cs, "budget")?.fetched_at).toBe(RUN);
+	});
+
+	it("uses the run time when price_fetched_at equals it or is not a valid time", () => {
+		expect(tierTicket(build(req(), event({ price_fetched_at: RUN })), "budget")?.fetched_at).toBe(
+			RUN,
+		);
+		expect(
+			tierTicket(build(req(), event({ price_fetched_at: "not a date" })), "budget")?.fetched_at,
+		).toBe(RUN);
+	});
+
+	it("keeps the mid-tier midpoint an estimate and fee lines on the estimate table's as-of", () => {
+		const cs = build(req(), event({ price_fetched_at: OLDER }));
+		expect(tierTicket(cs, "mid")?.is_estimate).toBe(true);
+		expect(tierTicket(cs, "budget")?.is_estimate).toBe(false);
+		const fees = feeLines(cs);
+		expect(fees.length).toBeGreaterThan(0);
+		for (const f of fees)
+			expect(f).toMatchObject({ is_estimate: true, fetched_at: ESTIMATES_AS_OF });
+	});
+
+	it("leaves no-price fallback ticket estimates on ESTIMATES_AS_OF, ignoring price_fetched_at", () => {
+		const cs = build(req(), event({ price_range: null, price_fetched_at: OLDER }));
+		const tickets = cs.flatMap((c) => c.items.filter((i) => i.kind === "ticket"));
+		expect(tickets.length).toBeGreaterThan(0);
+		for (const t of tickets)
+			expect(t).toMatchObject({ is_estimate: true, fetched_at: ESTIMATES_AS_OF });
+	});
+});
+
+describe("ticketPriceAsOf", () => {
+	it("returns the older stored time, else the run time", () => {
+		const run = "2026-11-06T10:00:00Z";
+		expect(ticketPriceAsOf({}, run)).toBe(run);
+		expect(ticketPriceAsOf({ price_fetched_at: "2026-11-01T00:00:00Z" }, run)).toBe(
+			"2026-11-01T00:00:00Z",
+		);
+		expect(ticketPriceAsOf({ price_fetched_at: "2026-12-01T00:00:00Z" }, run)).toBe(run);
+		expect(ticketPriceAsOf({ price_fetched_at: "garbage" }, run)).toBe(run);
 	});
 });
 

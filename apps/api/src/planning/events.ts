@@ -119,6 +119,11 @@ export async function lookupEventUrl(
 	}
 }
 
+/**
+ * The event as last stored, for when its provider or page is down. Its price
+ * keeps the time it was really fetched (`price_fetched_at`), so the plan's
+ * ticket lines aren't stamped as fetched in this run.
+ */
 async function storedEvent(
 	db: D1Database,
 	provider: string,
@@ -127,7 +132,7 @@ async function storedEvent(
 	const r = await db
 		.prepare(
 			`SELECT provider, provider_event_id, name, category, venue_name, city, country, lat, lng, local_date,
-			   starts_at, url, price_min_minor, price_max_minor, price_currency
+			   starts_at, url, price_min_minor, price_max_minor, price_currency, fetched_at
 			 FROM events WHERE provider = ? AND provider_event_id = ?`,
 		)
 		.bind(provider, providerEventId)
@@ -156,6 +161,7 @@ async function storedEvent(
 						currency: r.price_currency,
 					}
 				: null,
+		...(typeof r.fetched_at === "string" ? { price_fetched_at: r.fetched_at } : {}),
 	};
 }
 

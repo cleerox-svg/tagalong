@@ -8,6 +8,7 @@
  */
 import { formatMoney } from "@tagalong/shared";
 import { LIVE_USER, newId, nowIso } from "../lib/http.js";
+import { notifyJarvisPriceDrop } from "../lib/jarvis-events.js";
 import { WEB_ORIGIN } from "../lib/share.js";
 import { sendEmail } from "../providers/resend.js";
 import { dispatchPush } from "../push/dispatch.js";
@@ -43,9 +44,17 @@ export function isAlertWorthy(best: number | null, now: number | null): boolean 
 	return now < best && best - now >= Math.ceil(best * ALERT_MIN_DROP_RATE);
 }
 
+/** Where background work goes: the cron's ExecutionContext. */
+type WaitUntil = Pick<ExecutionContext, "waitUntil">;
+
+/**
+ * `ctx` (the cron's) lets each Jarvis event go out in the background; without
+ * it (tests) the event is awaited in line. Either way it never throws.
+ */
 export async function checkSavedTrips(
 	env: Env,
 	now = new Date(),
+	ctx?: WaitUntil,
 ): Promise<{ checked: number; alerts: number }> {
 	const db = env.DB;
 	const cutoff = new Date(now.getTime() - RECHECK_EVERY_MS).toISOString();
@@ -73,7 +82,7 @@ export async function checkSavedTrips(
 		// One trip's failure (a provider error, or a foreign-key error because
 		// its owner deleted their account mid-run) must not stop the others.
 		try {
-			if (await checkOneTrip(env, trip)) alerts++;
+			if (await checkOneTrip(env, trip, ctx)) alerts++;
 		} catch (err) {
 			// No user id, email or trip details in the log: just what failed.
 			console.warn(
@@ -90,7 +99,7 @@ export async function checkSavedTrips(
  * write is guarded in SQL by the owner still existing (LIVE_USER), so an
  * account deleted mid-run gets no new plan or alert.
  */
-async function checkOneTrip(env: Env, trip: DueTrip): Promise<boolean> {
+async function checkOneTrip(env: Env, trip: DueTrip, ctx?: WaitUntil): Promise<boolean> {
 	const db = env.DB;
 	// Mark first: a run that fails part-way must not re-check the same trip every cron tick.
 	await db
@@ -151,6 +160,11 @@ async function checkOneTrip(env: Env, trip: DueTrip): Promise<boolean> {
 		)
 		.run();
 	if (!recorded.meta.changes) return false; // the owner deleted their account
+	// Jarvis (allowlisted owners only). Never throws, so it can't affect the
+	// push, the email or the rest of the run.
+	const jarvis = notifyJarvisPriceDrop(env, alertId, trip.user_id, trip.email);
+	if (ctx) ctx.waitUntil(jarvis);
+	else await jarvis;
 	await dispatchPush(env, { kind: "price_drop", alertId }); // never throws; no-op without FCM
 
 	if (!env.RESEND_API_KEY) return true; // recorded and shown in the app; no email until the key is set

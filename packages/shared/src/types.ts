@@ -195,6 +195,13 @@ export interface EventInfo {
 	 * means the provider lists the event as free.
 	 */
 	price_range: { min_minor: number; max_minor: number; currency: string } | null;
+	/**
+	 * ISO timestamp of when `price_range` was fetched from the provider. Absent
+	 * means it was fetched in this planning run. Set it when the event comes
+	 * from storage (e.g. the provider was down on a re-check) so ticket lines
+	 * keep the real "as of" instead of the run time.
+	 */
+	price_fetched_at?: string;
 }
 
 /** One line of a package, in its source currency. */
